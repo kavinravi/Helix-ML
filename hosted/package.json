@@ -1,0 +1,7 @@
+{
+  "name": "helix-hosted",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "dependencies": { "railway": "3.13.0" }
+}

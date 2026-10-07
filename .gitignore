@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.helix/
+.env*
+output/
+__pycache__/
+.vercel/
+.playwright-cli/

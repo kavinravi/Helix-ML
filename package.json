@@ -1,0 +1,37 @@
+{
+  "name": "helix-ml",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "local": "node local/start.mjs",
+    "start": "node local/server.mjs",
+    "doctor": "node local/doctor.mjs",
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "package": "npm run build && python3 local/package.py",
+    "preview": "vite preview --host 127.0.0.1",
+    "bridge": "node local/server.mjs",
+    "setup": "node local/setup.mjs",
+    "test": "node --test local/check.test.mjs",
+    "test:runtime": "node local/runtime_check.mjs",
+    "test:agents": "node local/agent_check.mjs",
+    "test:mvp": "node local/mvp_check.mjs",
+    "test:acceptance": "node local/acceptance_check.mjs",
+    "test:hosted": "node hosted/check.mjs"
+  },
+  "dependencies": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.0",
+    "@types/react-dom": "19.1.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.5"
+  }
+}
