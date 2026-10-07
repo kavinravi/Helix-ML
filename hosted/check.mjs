@@ -29,12 +29,30 @@ try {
   assert.ok(db.takeOAuth('github',flow.state,browser,a.id).verifier);
   assert.throws(()=>db.takeOAuth('github',flow.state,browser,a.id),/expired/);
   const before=process.env.HELIX_GITHUB_CLIENT_ID, secret=process.env.HELIX_GITHUB_CLIENT_SECRET;
+  const googleBefore=process.env.HELIX_GOOGLE_CLIENT_ID, googleSecret=process.env.HELIX_GOOGLE_CLIENT_SECRET;
   process.env.HELIX_GITHUB_CLIENT_ID='test-client';process.env.HELIX_GITHUB_CLIENT_SECRET='test-secret';
+  delete process.env.HELIX_GOOGLE_CLIENT_ID;delete process.env.HELIX_GOOGLE_CLIENT_SECRET;
+  assert.ok(!accountOAuth(db,'https://helix.example').methods().some(method=>method.id==='google'));
+  process.env.HELIX_GOOGLE_CLIENT_ID='test-google-client';
+  assert.ok(!accountOAuth(db,'https://helix.example').methods().some(method=>method.id==='google'),'Both Google credentials are required');
+  process.env.HELIX_GOOGLE_CLIENT_SECRET='test-google-secret';
   const oauth=accountOAuth(db,'https://helix.example');const start=oauth.begin('github',a.id);const target=new URL(start.url);
   assert.equal(target.origin,'https://github.com');assert.equal(target.searchParams.get('code_challenge_method'),'S256');
   assert.equal(target.searchParams.get('redirect_uri'),'https://helix.example/account/oauth/github/callback');assert.match(start.cookie,/HttpOnly.*SameSite=Lax.*Secure/);
   const realFetch=globalThis.fetch;
+  let googleSubject='google-user-456', googleName='Alice';
   globalThis.fetch=async (url,options)=>{
+    if(url==='https://oauth2.googleapis.com/token') {
+      assert.equal(options.body.get('client_id'),'test-google-client');
+      assert.equal(options.body.get('client_secret'),'test-google-secret');
+      assert.equal(options.body.get('redirect_uri'),'https://helix.example/account/oauth/google/callback');
+      assert.equal(options.body.get('grant_type'),'authorization_code');assert.ok(options.body.get('code_verifier'));
+      return Response.json({access_token:'temporary-google-token'});
+    }
+    if(url==='https://openidconnect.googleapis.com/v1/userinfo') {
+      assert.equal(options.headers.Authorization,'Bearer temporary-google-token');
+      return Response.json({sub:googleSubject,name:googleName});
+    }
     if(url==='https://github.com/login/oauth/access_token') {
       assert.equal(options.body.get('client_secret'),'test-secret');assert.ok(options.body.get('code_verifier'));
       return Response.json({access_token:'temporary-test-token'});
@@ -45,10 +63,35 @@ try {
   try {
     target.searchParams.set('code','one-time-code');
     assert.equal((await oauth.finish('github',target.searchParams,start.cookie.match(/helix_oauth=([^;]+)/)[1],a.id)).id,a.id);
+    const signInGoogle=async userId=>{
+      const flow=oauth.begin('google',userId), url=new URL(flow.url), browser=flow.cookie.match(/helix_oauth=([^;]+)/)[1];
+      assert.equal(url.origin,'https://accounts.google.com');assert.equal(url.searchParams.get('scope'),'openid profile');
+      assert.equal(url.searchParams.get('code_challenge_method'),'S256');
+      assert.equal(url.searchParams.get('redirect_uri'),'https://helix.example/account/oauth/google/callback');
+      url.searchParams.set('code','google-code');
+      const user=await oauth.finish('google',url.searchParams,browser,userId);
+      await assert.rejects(oauth.finish('google',url.searchParams,browser,userId),/expired/);
+      return user;
+    };
+    const first=await signInGoogle();assert.notEqual(first.id,a.id,'Matching names must not merge accounts');
+    db.saveWorkspace(first.id,{checkpoint:'google-workspace'});
+    googleName='Changed Display Name';
+    const returning=await signInGoogle();assert.equal(returning.id,first.id);
+    assert.equal(db.workspace(returning.id).checkpoint,'google-workspace');
+    await assert.rejects(signInGoogle(b.id),/another Helix account/);
+    googleSubject='google-link-789';
+    db.saveWorkspace(b.id,{checkpoint:'existing-workspace'});
+    assert.equal((await signInGoogle(b.id)).id,b.id);
+    assert.equal((await signInGoogle()).id,b.id);
+    assert.equal(db.workspace(b.id).checkpoint,'existing-workspace');
+    assert.equal(oauth.methods(b.id).find(method=>method.id==='google').linked,true);
+    db.saveWorkspace(b.id,null);
   } finally {
     globalThis.fetch=realFetch;
     if(before===undefined)delete process.env.HELIX_GITHUB_CLIENT_ID;else process.env.HELIX_GITHUB_CLIENT_ID=before;
     if(secret===undefined)delete process.env.HELIX_GITHUB_CLIENT_SECRET;else process.env.HELIX_GITHUB_CLIENT_SECRET=secret;
+    if(googleBefore===undefined)delete process.env.HELIX_GOOGLE_CLIENT_ID;else process.env.HELIX_GOOGLE_CLIENT_ID=googleBefore;
+    if(googleSecret===undefined)delete process.env.HELIX_GOOGLE_CLIENT_SECRET;else process.env.HELIX_GOOGLE_CLIENT_SECRET=googleSecret;
   }
   const token=db.session(a.id);db.saveWorkspace(a.id,{checkpoint:'alice'});db.close();
   db=accounts(root);assert.equal(db.authenticate(token.token).id,a.id);assert.equal(db.workspace(a.id).checkpoint,'alice');assert.equal(db.workspace(b.id),null);assert.deepEqual(db.identities(a.id),['github']);assert.equal(db.identify('google','123','alice').id,google.id);
@@ -75,5 +118,5 @@ try {
   assert.equal((await fetch(origin+'/api/session',{method:'POST',headers:{...alice,Origin:origin}})).status,404);
   assert.equal((await fetch(origin+'/account/logout',{method:'POST',headers:{...alice,Origin:origin}})).status,200);
   assert.equal((await fetch(origin+'/api/runs',{headers:alice})).status,401);
-  console.log('Hosted checks passed: password hashing, persistence, account separation, CSRF, OAuth PKCE/state/replay protection, explicit linking and worker proxy.');
+  console.log('Hosted checks passed: Google/GitHub sign-in, returning Google accounts, workspace-preserving linking, password hashing, persistence, account separation, CSRF, OAuth PKCE/state/replay protection and worker proxy.');
 } finally {if(app)await app.close();await new Promise(resolve=>worker.close(resolve));await rm(root,{recursive:true,force:true});}
