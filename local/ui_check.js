@@ -3,6 +3,7 @@ async page => {
   const check = (condition, message) => { if (!condition) throw new Error(message); };
   const origin = new URL(page.url()).origin;
   let signedIn = false, refreshed = false, submitted = null;
+  let savedRuns = [], failDelete = false, deleteRequests = 0;
   const providers = () => [
     {id:'codex',name:'Codex',installed:true,authenticated:refreshed,detail:refreshed?'Signed in with your subscription':'Subscription sign-in needs attention',capability:{status:'failed',detail:'Codex-only test failure'}},
     {id:'claude',name:'Claude Code',installed:true,authenticated:false,detail:'Sign in using claude auth login'},
@@ -19,7 +20,14 @@ async page => {
     if(path==='/api/tools') return json([{id:'runtime',name:'Training',status:'Ready',description:'CPU ready'}]);
     if(path==='/api/runs') {
       if(route.request().method()==='POST') { submitted=route.request().postDataJSON(); return json({error:'Intentional test stop after send'},400); }
-      return json([]);
+      return json(savedRuns);
+    }
+    if (/^\/api\/runs\/[^/]+\/artifacts$/.test(path)) return json([]);
+    if (/^\/api\/runs\/[^/]+$/.test(path) && route.request().method()==='DELETE') {
+      deleteRequests++;
+      if (failDelete) return json({error:'Deletion test failure'},500);
+      savedRuns=savedRuns.filter(run=>run.id!==path.split('/').at(-1));
+      return json({deleted:true});
     }
     if(path==='/account/provider') { signedIn=true; return json({agent:'codex',status:'connected',url:null,code:null}); }
     if(path==='/api/datasets') return json({id:'example',path:'/test-data'},201);
@@ -64,6 +72,31 @@ async page => {
   check(!(await rows.nth(1).innerText()).includes('Codex'),'A Codex error must not appear in the Claude row');
   check(await page.getByText('Codex-only test failure',{exact:true}).count()===1,'Technical errors must not be duplicated');
   check(!(await page.getByText('Codex-only test failure',{exact:true}).isVisible()),'Technical errors should be collapsed initially');
+  await page.getByRole('button',{name:'Close dialog',exact:true}).click();
+  check(await page.getByText('PROTOCOL',{exact:true}).count()===0,'The redundant protocol strip must be removed');
+  check(await page.getByRole('button',{name:'Edit experiment protocol',exact:true}).count()===0,'The composer must not have a duplicate protocol button');
+  savedRuns=['completed','running','queued'].map((status,index)=>({id:`00000000-0000-4000-8000-00000000000${index}`,task:{...submitted,objective:`${status} experiment`},status,phase:status==='completed'?'complete':'baseline',createdAt:new Date().toISOString(),startedAt:null,elapsed:10,trials:[],logs:[],best:null,score:null,next:0}));
+  const past=page.getByRole('button',{name:'completed experiment',exact:true});
+  const remove=page.getByRole('button',{name:'Delete experiment: completed experiment',exact:true});
+  await past.waitFor();await page.mouse.move(800,20);
+  check(await remove.evaluate(el=>getComputedStyle(el).opacity)==='0','Trash must be hidden until hover or keyboard focus');
+  await past.hover();check(await remove.evaluate(el=>getComputedStyle(el).opacity)==='1','Hover must reveal the trash button');
+  check(await page.getByRole('button',{name:/Delete experiment: (running|queued)/}).count()===0,'Active experiments must not offer deletion');
+  await past.click();await page.mouse.move(800,20);
+  check(await remove.evaluate(el=>getComputedStyle(el).opacity)==='0','Mouse selection must not leave the trash button visible');
+  await past.press('Tab');
+  check(await remove.evaluate(el=>getComputedStyle(el).opacity)==='1','Keyboard users must be able to reach deletion');
+  page.once('dialog',dialog=>dialog.dismiss());await remove.press('Enter');
+  check(deleteRequests===0,'Cancelling must not send a deletion request');
+  failDelete=true;page.once('dialog',dialog=>dialog.accept());await remove.press('Enter');
+  await page.getByText('Deletion test failure',{exact:true}).waitFor();
+  check(await past.count()===1,'A failed deletion must keep the experiment');
+  failDelete=false;await remove.focus();page.once('dialog',dialog=>dialog.accept());await remove.press('Enter');
+  await past.waitFor({state:'detached'});
+  check(await page.getByRole('textbox',{name:'Experiment message',exact:true}).isVisible(),'Deleting the open experiment must return to the composer');
+  check(await page.getByRole('button',{name:'running experiment',exact:true}).count()===1,'Deleting history must preserve other experiments');
+  await page.reload();await page.getByRole('button',{name:'running experiment',exact:true}).waitFor();
+  check(await past.count()===0,'Deleted history must stay gone after refresh');
   await page.getByRole('button',{name:'Close dialog',exact:true}).click();
   const avatar=page.getByRole('button',{name:'Signed in as kavinravi',exact:true});
   check(await avatar.innerText()==='K','The account badge must show only the first initial');

@@ -51,10 +51,15 @@ details[open] > summary::after { content: "−"; }
 .new-button:hover { background: #2a2f24; }
 .history-label { margin: 35px 13px 12px; font-size: 11px; color: #8e9387; }
 .history { flex: 1; min-height: 0; overflow-y: auto; }
-.history-item { width: 100%; padding: 11px 12px; display: flex; align-items: center; gap: 10px; text-align: left; font-size: 12px; color: #b7bbb1; margin-bottom: 3px; }
+.history-row { display: flex; align-items: center; border-radius: 7px; margin-bottom: 3px; }
+.history-item { flex: 1; min-width: 0; padding: 11px 12px; display: flex; align-items: center; gap: 10px; text-align: left; font-size: 12px; color: #b7bbb1; }
 .history-item > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.history-item:hover { background: #1e211c; }
-.history-item.selected { background: #262b22; color: #e1e7d9; }
+.history-row:hover { background: #1e211c; }
+.history-row.selected { background: #262b22; }
+.history-row.selected .history-item { color: #e1e7d9; }
+.history-delete { display: grid; place-items: center; width: 32px; height: 34px; flex-shrink: 0; color: #858e7d; opacity: 0; pointer-events: none; }
+.history-row:hover .history-delete, .history-item:focus-visible + .history-delete, .history-delete:focus-visible { opacity: 1; pointer-events: auto; }
+.history-delete:hover { color: #edb4a2; background: #3a2925; }
 .run-dot { width: 4px; height: 4px; border-radius: 50%; background: #636b5a; flex-shrink: 0; }
 .run-dot.running, .run-dot.queued { background: var(--green); animation: breathe 2s ease-in-out infinite; }
 .run-dot.failed { background: #d69583; }
@@ -217,10 +222,6 @@ h1 { font-family: "Source Serif 4", Georgia, serif; font-weight: 400; letter-spa
 .trial > summary { border-top: 1px solid #2a3124; }
 .trial > summary > span:first-child { display: flex; align-items: baseline; gap: 12px; }
 .trial i { font: normal 10px var(--mono); color: #8e9e7e; }
-.protocol-strip { width: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 12px 3px; color: #b0bba5; font-size: 11px; text-align: left; }
-.protocol-strip:hover { color: #d1e3be; }
-.protocol-label { font: 9px var(--mono); letter-spacing: 1px; color: #8fa17e; margin-right: auto; }
-.protocol-strip > span:not(:first-child) + span::before { content: "/"; margin-right: 12px; color: #58644c; }
 .agent-logo { display: block; width: 22px; height: 22px; object-fit: contain; flex-shrink: 0; }
 .agent-picker { position: relative; }
 .agent-picker > summary { display: flex; align-items: center; gap: 9px; min-height: 36px; padding: 5px 9px; font-size: 12px; border-radius: 6px; }
@@ -302,9 +303,6 @@ h1 { font-family: "Source Serif 4", Georgia, serif; font-weight: 400; letter-spa
 }
 @media (max-width: 650px) {
   .workspace-label { display: none; }
-  .protocol-strip { gap: 9px; font-size: 10px; }
-  .protocol-strip > span:not(:first-child) + span::before { margin-right: 9px; }
-  .protocol-label { font-size: 8px; }
   .specimen-mark { width: 126px; height: 92px; margin-bottom: 22px; }
   .welcome-label { font-size: 9px; }
   .attach-start { margin-top: 22px; }

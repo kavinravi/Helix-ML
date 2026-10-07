@@ -100,6 +100,7 @@ export async function createService({
   const shutdown = new AbortController();
   // ponytail: one CPU experiment at a time; use a queue if concurrent runs become necessary.
   let active = null, starting = false, verification = null;
+  const mutating = new Set();
   const capabilities = new Map();
   const launch = (run) => {
     const controller = new AbortController();
@@ -293,7 +294,7 @@ export async function createService({
       if (request.method === "OPTIONS") {
         response.setHeader(
           "Access-Control-Allow-Methods",
-          "GET,POST,PUT,OPTIONS",
+          "GET,POST,PUT,DELETE,OPTIONS",
         );
         response.setHeader(
           "Access-Control-Allow-Headers",
@@ -386,35 +387,50 @@ export async function createService({
         if (!run) return respond(404, { error: "Run not found." });
         if (!match[2] && request.method === "GET")
           return respond(200, snapshot(run));
+        if (!match[2] && request.method === "DELETE") {
+          if (starting || active?.run.id === run.id || !["completed", "stopped", "failed", "paused"].includes(run.status))
+            return respond(409, { error: "Wait for the experiment to finish, pause, or stop before deleting it." });
+          if (mutating.has(run.id)) return respond(409, { error: "This experiment is being updated. Try again shortly." });
+          mutating.add(run.id);
+          try {
+            await rm(join(runRoot, match[1]), { recursive: true, force: true });
+            runs.delete(match[1]);
+            return respond(200, { deleted: true });
+          } finally { mutating.delete(run.id); }
+        }
         if (match[2] === "action" && request.method === "POST") {
-          const { action } = await jsonBody(request);
-          if (action === "resume") {
-            if (verification) return respond(409, { error: "An agent check is running. Wait for it to finish." });
-            if (active || starting) return respond(409, { error: "Another experiment is running or stopping." });
-            if (!["paused", "failed"].includes(run.status)) throw new Error("Only paused or failed runs can resume.");
-            if (run.selectionFrozen && !Number.isFinite(run.testScore)) {
-              const final = JSON.parse(await readFile(join(runRoot, run.id, "final-test.json"), "utf8").catch(() => "{}"));
-              if (final.status !== "completed") throw new Error("Final evaluation was interrupted or failed. Start a new experiment; the final fit cannot be retried.");
-            }
-            if (elapsed(run) >= run.task.minutes * 60) throw new Error("This run used its time budget. Start a new experiment with a larger budget.");
-            starting = true;
-            try {
-              await ready(run.task.agent);
-              if (stopping) throw new Error("The runner is shutting down.");
-              if (!["paused", "failed"].includes(run.status)) throw new Error("The experiment was stopped while its agent was being checked.");
-              launch(run);
-            } finally { starting = false; }
-          } else if (["pause", "stop"].includes(action)) {
-            if (action === "pause" && run.phase === "finalizing") throw new Error("Final evaluation runs once and cannot be paused. Allow it to finish, or stop the experiment.");
-            if (!["running", "queued", "paused", "failed"].includes(run.status)) throw new Error("This experiment has already ended.");
-            run.status = action === "pause" ? "paused" : "stopped";
-            log(run, "system", action === "pause" ? "Paused. Resume restarts the unfinished trial within the remaining budget." : "Stopped. Completed trial artifacts are preserved.");
-            const entry = active?.run.id === run.id ? active : null;
-            entry?.controller.abort();
-            if (entry) await entry.promise;
-            await saveRun(runRoot, run);
-          } else throw new Error("Choose pause, resume, or stop.");
-          return respond(200, snapshot(run));
+          if (mutating.has(run.id)) return respond(409, { error: "This experiment is being updated. Try again shortly." });
+          mutating.add(run.id);
+          try {
+            const { action } = await jsonBody(request);
+            if (action === "resume") {
+              if (verification) return respond(409, { error: "An agent check is running. Wait for it to finish." });
+              if (active || starting) return respond(409, { error: "Another experiment is running or stopping." });
+              if (!["paused", "failed"].includes(run.status)) throw new Error("Only paused or failed runs can resume.");
+              if (run.selectionFrozen && !Number.isFinite(run.testScore)) {
+                const final = JSON.parse(await readFile(join(runRoot, run.id, "final-test.json"), "utf8").catch(() => "{}"));
+                if (final.status !== "completed") throw new Error("Final evaluation was interrupted or failed. Start a new experiment; the final fit cannot be retried.");
+              }
+              if (elapsed(run) >= run.task.minutes * 60) throw new Error("This run used its time budget. Start a new experiment with a larger budget.");
+              starting = true;
+              try {
+                await ready(run.task.agent);
+                if (stopping) throw new Error("The runner is shutting down.");
+                if (!["paused", "failed"].includes(run.status)) throw new Error("The experiment was stopped while its agent was being checked.");
+                launch(run);
+              } finally { starting = false; }
+            } else if (["pause", "stop"].includes(action)) {
+              if (action === "pause" && run.phase === "finalizing") throw new Error("Final evaluation runs once and cannot be paused. Allow it to finish, or stop the experiment.");
+              if (!["running", "queued", "paused", "failed"].includes(run.status)) throw new Error("This experiment has already ended.");
+              run.status = action === "pause" ? "paused" : "stopped";
+              log(run, "system", action === "pause" ? "Paused. Resume restarts the unfinished trial within the remaining budget." : "Stopped. Completed trial artifacts are preserved.");
+              const entry = active?.run.id === run.id ? active : null;
+              entry?.controller.abort();
+              if (entry) await entry.promise;
+              await saveRun(runRoot, run);
+            } else throw new Error("Choose pause, resume, or stop.");
+            return respond(200, snapshot(run));
+          } finally { mutating.delete(run.id); }
         }
         if (match[2] === "artifacts" && request.method === "GET") {
           const files = [];

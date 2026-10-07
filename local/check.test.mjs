@@ -231,6 +231,7 @@ test("runner validates configuration, isolates files, and enforces lifecycle bou
       assert.equal((await fetch(`${url}/api/runs/${artifactRun}/file?path=${encodeURIComponent(path)}`, { headers })).status, 400);
     }
     service.runs.delete(artifactRun);
+    await rm(artifactRoot, { recursive: true });
     const inspected = await fetch(url + "/api/datasets/inspect", {
       method: "POST", headers, body: JSON.stringify({ ...task, dataset: source }),
     });
@@ -295,6 +296,37 @@ test("runner validates configuration, isolates files, and enforces lifecycle bou
     assert.match((await (await act("resume")).json()).error, /Only paused/);
     assert.equal((await act("invalid")).status, 400);
     assert.equal(service.runs.size, 1);
+    const deleteUrl = `${url}/api/runs/${lifecycle.id}`;
+    assert.equal((await fetch(deleteUrl, { method: "DELETE" })).status, 401);
+    assert.equal((await fetch(deleteUrl, { method: "DELETE", headers: { ...headers, Origin: "https://untrusted.example" } })).status, 403);
+    assert.match((await fetch(deleteUrl, { method: "OPTIONS", headers })).headers.get("access-control-allow-methods"), /DELETE/);
+    for (const status of ["running", "queued"]) {
+      lifecycle.status = status;
+      assert.equal((await fetch(deleteUrl, { method: "DELETE", headers })).status, 409);
+      assert.ok(service.runs.has(lifecycle.id));
+    }
+    const survivor = await createRun(join(root, "runner", "runs"), task);
+    survivor.status = "stopped";
+    await saveRun(join(root, "runner", "runs"), survivor);
+    service.runs.set(survivor.id, survivor);
+    await symlink(dataset.path, join(root, "runner", "runs", lifecycle.id, "shared-data"));
+    for (const status of ["completed", "failed", "paused", "stopped"]) {
+      const value = status === "completed" ? lifecycle : await createRun(join(root, "runner", "runs"), task);
+      value.status = status;
+      service.runs.set(value.id, value);
+      const result = await fetch(`${url}/api/runs/${value.id}`, { method: "DELETE", headers });
+      assert.equal(result.status, 200);
+      assert.equal((await result.json()).deleted, true);
+      assert.equal(service.runs.has(value.id), false);
+      await assert.rejects(readFile(join(root, "runner", "runs", value.id, "run.json")), { code: "ENOENT" });
+    }
+    assert.equal((await fetch(deleteUrl, { method: "DELETE", headers })).status, 404);
+    assert.equal((await fetch(deleteUrl, { headers })).status, 404);
+    assert.equal(await readFile(join(dataset.path, "train.csv"), "utf8"), "original", "Deletion must preserve shared datasets, including symlink targets");
+    assert.equal((await fetch(url + "/api/runs", { headers }).then(r => r.json())).length, 1);
+    await service.close();
+    service = await createService({ root: join(root, "runner"), port: 0 });
+    assert.deepEqual([...service.runs.keys()], [survivor.id], "Deleted experiments must stay deleted after restarting");
   } finally {
     await service?.close();
     await rm(root, { recursive: true, force: true });

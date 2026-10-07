@@ -21,6 +21,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     settings: "M4 7h9m4 0h3M4 17h3m4 0h9M13 4v6M7 14v6", pause: "M8 5v14M16 5v14", play: "m8 5 11 7-11 7z",
     stop: "M6 6h12v12H6z", close: "m6 6 12 12M18 6 6 18", check: "m5 12 4 4L19 6",
     download: "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5", sidebar: "M3 4h18v16H3zM9 4v16", link: "M9 7H6a5 5 0 0 0 0 10h3m6-10h3a5 5 0 0 1 0 10h-3M8 12h8",
+    trash: "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7",
     attach: "m8 13 7-7a3 3 0 0 1 4 4l-9 9a5 5 0 0 1-7-7L13 2m-8 12 9-9",
   };
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name] || paths.file} /></svg>;
@@ -72,6 +73,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
   const agentMenu = useRef<HTMLDetailsElement>(null);
   const composer = useRef<HTMLFormElement>(null);
   const prompt = useRef<HTMLTextAreaElement>(null);
+  const historyRevision = useRef(0);
   const run = runs.find((value) => value.id === runId);
   const sentTask = submission?.task || run?.task;
   const active = runs.find((value) => ["running", "queued"].includes(value.status));
@@ -120,6 +122,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
     let stopped = false, timer: ReturnType<typeof setTimeout>;
     const controller = new AbortController();
     const poll = async () => {
+      const revision = historyRevision.current;
       const results = await Promise.allSettled([
         api<Provider[]>(connection, "/api/providers", { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]) }),
         api<Run[]>(connection, "/api/runs", { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]) }),
@@ -131,7 +134,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
         setProviders([]); setConnectionError(cloud ? "Reconnecting to your workspace…" : "Helix disconnected. Reopen the app to reconnect.");
         if (connection.url === location.origin && results[0].reason?.status === 401) { if (cloud) cloud.expired(); else void connectLocal(); }
       }
-      if (results[1].status === "fulfilled") setRuns(results[1].value);
+      if (results[1].status === "fulfilled" && revision === historyRevision.current) setRuns(results[1].value);
       if (results[2].status === "fulfilled") setTools(results[2].value);
       timer = setTimeout(poll, 2000);
     };
@@ -270,9 +273,20 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) { setError((e as Error).message); }
   };
-  const newRun = () => { if (busy === "start") return; setSubmission(null); if (readOnly) setModal("settings"); setRunId(null); setTask((prev) => ({ ...prev, objective: "", dataset: "", target: "" })); setError(""); setSidebar(false); requestAnimationFrame(() => prompt.current?.focus()); };
+  const newRun = () => { if (busy === "start" || busy === "delete") return; setSubmission(null); if (readOnly) setModal("settings"); setRunId(null); setTask((prev) => ({ ...prev, objective: "", dataset: "", target: "" })); setError(""); setSidebar(false); requestAnimationFrame(() => prompt.current?.focus()); };
   const reuseRun = () => { if (!run) return; setTask({ ...defaults, ...run.task }); setSeedText(run.task.seeds.join(", ")); setAssetText((run.task.assetColumns || []).join(", ")); setSelected(run.task.agent); setRunId(null); setError(""); setModal("settings"); requestAnimationFrame(() => prompt.current?.focus()); };
-  const openRun = (value: Run) => { if (busy === "start") return; setSubmission(null); setRunId(value.id); setTask({ ...defaults, ...value.task, objective: "" }); setSeedText(value.task.seeds.join(", ")); setAssetText((value.task.assetColumns || []).join(", ")); setSelected(value.task.agent); setError(""); setSidebar(false); };
+  const openRun = (value: Run) => { if (busy === "start" || busy === "delete") return; setSubmission(null); setRunId(value.id); setTask({ ...defaults, ...value.task, objective: "" }); setSeedText(value.task.seeds.join(", ")); setAssetText((value.task.assetColumns || []).join(", ")); setSelected(value.task.agent); setError(""); setSidebar(false); };
+  const deleteRun = async (value: Run) => {
+    if (!connection || busy || !window.confirm(`Delete "${value.task.objective}"?\n\nThis permanently removes this experiment and its results. Uploaded datasets are kept.`)) return;
+    setBusy("delete"); setError("");
+    try {
+      await api(connection, `/api/runs/${value.id}`, { method: "DELETE", signal: AbortSignal.timeout(60_000) });
+      historyRevision.current++;
+      setRuns(previous => previous.filter(item => item.id !== value.id));
+      if (runId === value.id) newRun();
+    } catch (e) { setError((e as Error).message); setSidebar(false); setModal(null); }
+    finally { setBusy(""); }
+  };
   const chooseUpload = (folder = false) => { attachMenu.current?.removeAttribute("open"); if (!connection) { setModal("connection"); return; } (folder ? folderInput : fileInput).current?.click(); };
   const editSubmission = () => {
     if (!submission) return;
@@ -296,11 +310,12 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
     {sidebar && <button className="sidebar-scrim" aria-label="Close sidebar" onClick={() => setSidebar(false)} />}
     <aside className="sidebar">
       <button className="brand" onClick={newRun} aria-label="Helix home"><HelixMark /><span>helix<span className="brand-dot">.</span></span></button>
-      <button className="new-button" disabled={busy === "start"} onClick={newRun}><Icon name="plus" />New experiment</button>
+      <button className="new-button" disabled={busy === "start" || busy === "delete"} onClick={newRun}><Icon name="plus" />New experiment</button>
       <div className="history-label">Experiments</div>
-      <nav className="history" aria-label="Saved experiments">{runs.map((value) => <button key={value.id} className={`history-item ${runId === value.id ? "selected" : ""}`} onClick={() => openRun(value)} title={value.task.objective}>
-        <span className={`run-dot ${value.status}`} /><span>{value.task.objective}</span>
-      </button>)}</nav>
+      <nav className="history" aria-label="Saved experiments">{runs.map((value) => <div key={value.id} className={`history-row ${runId === value.id ? "selected" : ""}`}>
+        <button className="history-item" disabled={busy === "start" || busy === "delete"} onClick={() => openRun(value)} title={value.task.objective}><span className={`run-dot ${value.status}`} /><span>{value.task.objective}</span></button>
+        {!["running", "queued"].includes(value.status) && <button className="history-delete" disabled={!!busy} aria-label={`Delete experiment: ${value.task.objective}`} title="Delete experiment" onClick={() => void deleteRun(value)}><Icon name="trash" size={15} /></button>}
+      </div>)}</nav>
       <button className="connections-button" onClick={() => setModal("connections")}><Icon name="link" />Connections</button>
     </aside>
     <main className="workspace">
@@ -349,7 +364,6 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
           {(error || connectionError) && !modal && <div className="composer-error" role="alert">{error || connectionError}<button aria-label="Dismiss error" onClick={() => { setError(""); setConnectionError(""); }}><Icon name="close" size={14} /></button></div>}
           {sentTask && <div className="run-dock"><span><AgentMark agent={sentTask.agent} />{sentTask.agent === "claude" ? "Claude Code" : "Codex"}<span className="run-dock-status">{submission ? submission.error ? "Needs attention" : "Starting" : run?.status}</span></span><button onClick={() => setModal(run ? "run-settings" : "settings")}><Icon name="settings" size={16} />View setup</button></div>}
           <div hidden={!!sentTask}>
-          <button className="protocol-strip" aria-label="Edit experiment protocol" onClick={() => setModal("settings")}><span className="protocol-label">PROTOCOL</span><span>{task.metric === "log_loss" ? "Log loss" : task.metric.toUpperCase()}</span><span>{task.validation === "cv" ? `${task.folds}-fold CV` : "Fixed split"}</span><span>{numberLabel(task.minutes)} min</span><span>{numberLabel(task.trials)} trials</span><Icon name="settings" size={13} /></button>
           <form ref={composer} className={`composer ${dragging ? "dragging" : ""}`} onSubmit={start}
             onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
             onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}

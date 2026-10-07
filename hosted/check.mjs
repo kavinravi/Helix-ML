@@ -68,6 +68,10 @@ try {
   assert.equal((await fetch(origin+'/account/workspace',{method:'POST',headers:{...alice,Origin:'https://evil.example'}})).status,403);
   assert.equal((await fetch(origin+'/api/runs',{headers:alice}).then(r=>r.json())).user,`Bearer ${a.id}`);
   assert.equal((await fetch(origin+'/api/runs',{headers:bob}).then(r=>r.json())).user,`Bearer ${b.id}`);
+  const deletePath='/api/runs/00000000-0000-4000-8000-000000000001';
+  assert.equal((await fetch(origin+deletePath,{method:'DELETE',headers:{cookie:bob.cookie,Origin:origin}})).status,401);
+  assert.equal((await fetch(origin+deletePath,{method:'DELETE',headers:{...bob,Origin:'https://evil.example'}})).status,403);
+  assert.equal((await fetch(origin+deletePath,{method:'DELETE',headers:{...bob,Origin:origin}}).then(r=>r.json())).user,`Bearer ${b.id}`);
   assert.equal((await fetch(origin+'/api/session',{method:'POST',headers:{...alice,Origin:origin}})).status,404);
   assert.equal((await fetch(origin+'/account/logout',{method:'POST',headers:{...alice,Origin:origin}})).status,200);
   assert.equal((await fetch(origin+'/api/runs',{headers:alice})).status,401);
