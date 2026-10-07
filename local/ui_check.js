@@ -13,6 +13,7 @@ async page => {
     if(path==='/health') return json({mode:'hosted'});
     if(path==='/account/session') return json({username:'ui-check',csrf:'browser-test-session'});
     if(path==='/account/methods') return json([]);
+    if(path==='/account/logout') return json({signedOut:true});
     if(path==='/account/workspace') return json({ready:true});
     if(path==='/api/providers') { if(url.searchParams.has('refresh')) refreshed=signedIn; return json(providers()); }
     if(path==='/api/tools') return json([{id:'runtime',name:'Training',status:'Ready',description:'CPU ready'}]);
@@ -63,6 +64,19 @@ async page => {
   check(!(await rows.nth(1).innerText()).includes('Codex'),'A Codex error must not appear in the Claude row');
   check(await page.getByText('Codex-only test failure',{exact:true}).count()===1,'Technical errors must not be duplicated');
   check(!(await page.getByText('Codex-only test failure',{exact:true}).isVisible()),'Technical errors should be collapsed initially');
+  await page.getByRole('button',{name:'Close dialog',exact:true}).click();
+  const avatar=page.getByRole('button',{name:'Signed in as ui-check',exact:true});
+  check(await avatar.innerText()==='UI','The signed-in account needs a visible initials badge');
+  await page.setViewportSize({width:390,height:844});
+  const bounds=await avatar.boundingBox();
+  check(bounds && bounds.x>=0 && bounds.x+bounds.width<=390,'The account badge must stay visible on mobile');
+  await avatar.focus();await avatar.press('Enter');
+  await page.getByRole('heading',{name:'Connections',exact:true}).waitFor();
+  check(await page.getByText('Cloud · ui-check',{exact:true}).isVisible(),'The badge must open the signed-in account');
+  await page.getByRole('button',{name:'Sign out',exact:true}).click();
+  await page.getByRole('heading',{name:'Welcome back',exact:true}).waitFor();
+  check(await avatar.count()===0,'The badge must disappear after signing out');
+  await page.setViewportSize({width:1440,height:900});
   check(errors.length===0,errors.join('\n'));
   await page.unroute(origin+'/**');
 }
