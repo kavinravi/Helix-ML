@@ -201,7 +201,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
     if (!Number.isFinite(task.testFraction) || (task.validation === "holdout" && !Number.isFinite(task.holdoutFraction))) throw new Error("Enter the split percentages in Settings.");
     const seeds = seedText.split(",").map((value) => Number(value.trim()));
     if (seedText.split(",").some((value) => !/^\d+$/.test(value.trim())) || seeds.length > 5 || new Set(seeds).size !== seeds.length || seeds.some((value) => !Number.isSafeInteger(value) || value < 0 || value > 2 ** 32 - 1)) throw new Error("Use up to five unique 32-bit seeds in Settings.");
-    return { ...task, agent: selected, seeds };
+    return { ...task, model: task.searchModels ? "" : task.model, agent: selected, seeds };
   };
   const checkDataset = async () => {
     if (!connection || !enabled) return;
@@ -455,13 +455,13 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
               {settings.dataset && <div className="setup-dataset"><Icon name="file" size={17} /><span title={settings.dataset}>{datasetName(settings.dataset)}</span>{datasetInfo && <span>{datasetInfo.rows.toLocaleString()} rows</span>}</div>}
               {!readOnly && <div className="dataset-actions"><button type="button" onClick={() => chooseUpload()}><Icon name="plus" size={14} />{settings.dataset ? "Replace CSV" : "Choose CSV"}</button><button type="button" onClick={() => chooseUpload(true)}><Icon name="folder" size={14} />Choose folder</button></div>}
               {!cloud && <details className="settings-detail dataset-path"><summary>Use a local path</summary><label>CSV or folder path<input value={settings.dataset} onChange={(e) => update("dataset", e.target.value)} placeholder="/path/to/data.csv" /></label></details>}
-              <div className="field-grid"><label>Target column<input value={settings.target} onChange={(e) => update("target", e.target.value)} placeholder="label" /></label><label>Metric<select value={settings.metric} onChange={(e) => update("metric", e.target.value as Metric)}><option value="accuracy">Accuracy</option><option value="auroc">AUROC</option><option value="log_loss">Log loss</option><option value="rmse">RMSE</option><option value="mae">MAE</option></select></label></div>
+              <div className="field-grid"><label>Target column<input value={settings.target} onChange={(e) => update("target", e.target.value)} placeholder="Enter column name" /></label><label>Metric<select value={settings.metric} onChange={(e) => update("metric", e.target.value as Metric)}><option value="accuracy">Accuracy</option><option value="auroc">AUROC</option><option value="log_loss">Log loss</option><option value="rmse">RMSE</option><option value="mae">MAE</option></select></label></div>
               <details className="settings-detail"><summary>Asset columns</summary><label>Columns containing file paths<input value={readOnly ? settings.assetColumns.join(", ") : assetText} onChange={(e) => { setAssetText(e.target.value); update("assetColumns", e.target.value.split(",").map((s) => s.trim()).filter(Boolean)); }} placeholder="image, audio, text_file" /></label></details>
             </section>
             <details className="settings-section settings-group">
               <summary><h3><span>02</span> Models & strategies</h3><span className="group-value">{settings.searchModels ? "Auto" : "Custom"}</span></summary>
-              <div className="model-choice" role="radiogroup" aria-label="Model selection"><label><input type="radio" name="model-search" checked={settings.searchModels} onChange={() => update("searchModels", true)} /><span>Auto search</span></label><label><input type="radio" name="model-search" checked={!settings.searchModels} onChange={() => update("searchModels", false)} /><span>Choose model</span></label></div>
-              <label>{settings.searchModels ? "Model constraints" : "Model or family"}<input value={settings.model} onChange={(e) => update("model", e.target.value)} placeholder={settings.searchModels ? "Any model, or add a constraint" : "e.g. tree-based models only"} /></label>
+              <div className="model-choice" role="radiogroup" aria-label="Model selection"><label><input type="radio" name="model-search" checked={settings.searchModels} onChange={() => setTask(previous => ({ ...previous, searchModels: true, model: "" }))} /><span>Auto search</span></label><label><input type="radio" name="model-search" checked={!settings.searchModels} onChange={() => update("searchModels", false)} /><span>Choose model</span></label></div>
+              {!settings.searchModels && <label>Model or family<input value={settings.model} onChange={(e) => update("model", e.target.value)} placeholder="e.g. tree-based models only" /></label>}
               <div className="strategy-grid">{strategies.map(([key, label]) => <label key={key} className="strategy-option"><input type="checkbox" aria-label={label} checked={settings.policy[key]} onChange={(e) => update("policy", { ...task.policy, [key]: e.target.checked })} /><span>{label}</span></label>)}</div>
             </details>
             <section className="settings-section">
