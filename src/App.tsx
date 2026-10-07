@@ -75,7 +75,8 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
   const prompt = useRef<HTMLTextAreaElement>(null);
   const historyRevision = useRef(0);
   const run = runs.find((value) => value.id === runId);
-  const sentTask = submission?.task || run?.task;
+  const pending = runId === "pending" ? submission : null;
+  const sentTask = pending?.task || run?.task;
   const active = runs.find((value) => ["running", "queued"].includes(value.status));
   const enabled = !!connection && !!providers.find((value) => value.id === selected)?.authenticated;
   const selectedProvider = providers.find((value) => value.id === selected);
@@ -162,10 +163,10 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
   useEffect(() => { folderInput.current?.setAttribute("webkitdirectory", ""); }, []);
   useEffect(() => {
     setArtifacts([]);
-    if (!connection || !runId) return;
+    if (!connection || !run) return;
     const controller = new AbortController();
     api<Artifact[]>(connection, `/api/runs/${runId}/artifacts`, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]) })
-      .then(setArtifacts).catch((e) => { if (!controller.signal.aborted) setError(e.message); });
+      .then(value => { if (!controller.signal.aborted) setArtifacts(value); }).catch((e) => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
   }, [connection, runId, run?.trials.length, run?.status]);
 
@@ -217,11 +218,13 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
           throw new Error(current.find(provider => provider.id === selected)?.detail || "Connect your agent first.");
         }
       }
-      setSubmission({ task: nextTask }); setRunId(null); update("objective", "");
+      setSubmission({ task: nextTask }); setRunId("pending"); update("objective", "");
       submitted = true;
       if (!window.matchMedia("(min-width: 1100px)").matches) setModal(null);
       const value = await api<Run>(connection, "/api/runs", { method: "POST", body: JSON.stringify(nextTask), signal: AbortSignal.timeout(360_000) });
-      setRuns((prev) => [value, ...prev.filter((saved) => saved.id !== value.id)]); setRunId(value.id); setSubmission(null);
+      historyRevision.current++;
+      setRuns((prev) => [value, ...prev.filter((saved) => saved.id !== value.id)]);
+      setRunId(current => current === "pending" ? value.id : current); setSubmission(null);
     } catch (e) {
       if (submitted) setSubmission((prev) => prev ? { ...prev, error: (e as Error).message } : null);
       else setError((e as Error).message);
@@ -274,8 +277,9 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
     } catch (e) { setError((e as Error).message); }
   };
   const newRun = () => { if (busy === "start" || busy === "delete") return; setSubmission(null); if (readOnly) setModal("settings"); setRunId(null); setTask((prev) => ({ ...prev, objective: "", dataset: "", target: "" })); setError(""); setSidebar(false); requestAnimationFrame(() => prompt.current?.focus()); };
-  const reuseRun = () => { if (!run) return; setTask({ ...defaults, ...run.task }); setSeedText(run.task.seeds.join(", ")); setAssetText((run.task.assetColumns || []).join(", ")); setSelected(run.task.agent); setRunId(null); setError(""); setModal("settings"); requestAnimationFrame(() => prompt.current?.focus()); };
-  const openRun = (value: Run) => { if (busy === "start" || busy === "delete") return; setSubmission(null); setRunId(value.id); setTask({ ...defaults, ...value.task, objective: "" }); setSeedText(value.task.seeds.join(", ")); setAssetText((value.task.assetColumns || []).join(", ")); setSelected(value.task.agent); setError(""); setSidebar(false); };
+  const reuseRun = () => { if (!run) return; setSubmission(null); setTask({ ...defaults, ...run.task }); setSeedText(run.task.seeds.join(", ")); setAssetText((run.task.assetColumns || []).join(", ")); setSelected(run.task.agent); setRunId(null); setError(""); setModal("settings"); requestAnimationFrame(() => prompt.current?.focus()); };
+  const openRun = (value: Run) => { if (busy === "delete") return; setRunId(value.id); setTask({ ...defaults, ...value.task, objective: "" }); setSeedText(value.task.seeds.join(", ")); setAssetText((value.task.assetColumns || []).join(", ")); setSelected(value.task.agent); setError(""); setSidebar(false); };
+  const openSubmission = () => { if (!submission) return; setRunId("pending"); setTask({ ...submission.task, objective: "" }); setSeedText(submission.task.seeds.join(", ")); setAssetText(submission.task.assetColumns.join(", ")); setSelected(submission.task.agent); setError(""); setSidebar(false); };
   const deleteRun = async (value: Run) => {
     if (!connection || busy || !window.confirm(`Delete "${value.task.objective}"?\n\nThis permanently removes this experiment and its results. Uploaded datasets are kept.`)) return;
     setBusy("delete"); setError("");
@@ -283,7 +287,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
       await api(connection, `/api/runs/${value.id}`, { method: "DELETE", signal: AbortSignal.timeout(60_000) });
       historyRevision.current++;
       setRuns(previous => previous.filter(item => item.id !== value.id));
-      if (runId === value.id) newRun();
+      if (runId === value.id) { if (submission) openSubmission(); else newRun(); }
     } catch (e) { setError((e as Error).message); setSidebar(false); setModal(null); }
     finally { setBusy(""); }
   };
@@ -291,7 +295,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
   const editSubmission = () => {
     if (!submission) return;
     setTask(submission.task); setSelected(submission.task.agent); setSeedText(submission.task.seeds.join(", "));
-    setAssetText(submission.task.assetColumns.join(", ")); setSubmission(null); setError(""); requestAnimationFrame(() => prompt.current?.focus());
+    setAssetText(submission.task.assetColumns.join(", ")); setRunId(null); setSubmission(null); setError(""); requestAnimationFrame(() => prompt.current?.focus());
   };
   const quit = async () => {
     if (!connection?.desktop) return;
@@ -312,8 +316,10 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
       <button className="brand" onClick={newRun} aria-label="Helix home"><HelixMark /><span>helix<span className="brand-dot">.</span></span></button>
       <button className="new-button" disabled={busy === "start" || busy === "delete"} onClick={newRun}><Icon name="plus" />New experiment</button>
       <div className="history-label">Experiments</div>
-      <nav className="history" aria-label="Saved experiments">{runs.map((value) => <div key={value.id} className={`history-row ${runId === value.id ? "selected" : ""}`}>
-        <button className="history-item" disabled={busy === "start" || busy === "delete"} onClick={() => openRun(value)} title={value.task.objective}><span className={`run-dot ${value.status}`} /><span>{value.task.objective}</span></button>
+      <nav className="history" aria-label="Saved experiments">
+      {submission && <div className={`history-row ${pending ? "selected" : ""}`}><button className="history-item" aria-current={pending ? "page" : undefined} onClick={openSubmission} title={submission.task.objective}><span className={`run-dot ${submission.error ? "failed" : "queued"}`} /><span className="history-title">{submission.task.objective}</span><span className="history-state">{submission.error ? "Failed" : "Starting"}</span></button></div>}
+      {runs.map((value) => <div key={value.id} className={`history-row ${runId === value.id ? "selected" : ""}`}>
+        <button className="history-item" disabled={busy === "delete"} aria-current={runId === value.id ? "page" : undefined} onClick={() => openRun(value)} title={value.task.objective}><span className={`run-dot ${value.status}`} /><span className="history-title">{value.task.objective}</span></button>
         {!["running", "queued"].includes(value.status) && <button className="history-delete" disabled={!!busy} aria-label={`Delete experiment: ${value.task.objective}`} title="Delete experiment" onClick={() => void deleteRun(value)}><Icon name="trash" size={15} /></button>}
       </div>)}</nav>
       <button className="connections-button" onClick={() => setModal("connections")}><Icon name="link" />Connections</button>
@@ -321,18 +327,18 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
     <main className="workspace">
       <header className="topbar">
         <button className="icon-button mobile-menu" aria-label="Open sidebar" onClick={() => setSidebar(true)}><Icon name="sidebar" /></button>
-        <span className="workspace-label">WORKSPACE <span>/</span></span><span className="conversation-title">{run?.task.objective || submission?.task.objective || "New experiment"}</span>
+        <span className="workspace-label">WORKSPACE <span>/</span></span><span className="conversation-title">{sentTask?.objective || "New experiment"}</span>
         <button className="connection-status" onClick={() => { setError(""); setModal("connections"); }}><span className={`connection-dot ${connection && !connectionError ? "online" : ""}`} />{connecting ? "Connecting…" : connection && !connectionError ? cloud ? "Cloud" : "Local" : "Connect"}</button>
         <button className={`icon-button setup-toggle ${settingsVisible ? "selected" : ""}`} aria-label="Toggle experiment setup" aria-expanded={settingsVisible} onClick={() => setModal(settingsVisible ? null : "settings")}><Icon name="settings" /></button>
         {cloud && <button className="account-avatar" aria-label={`Signed in as ${cloud.username}`} title={`Signed in as ${cloud.username}`} aria-haspopup="dialog" onClick={() => { setError(""); setModal("connections"); }}>{cloud.username.charAt(0).toUpperCase()}</button>}
       </header>
-      <section className={`conversation ${run || submission ? "has-run" : "is-empty"}`} aria-label="Experiment conversation">
-        {submission ? <div className="thread">
-          <div className="experiment-heading"><span>NEW EXPERIMENT</span><span>{submission.error ? "Needs attention" : "Starting"}</span></div>
-          <article className="user-message"><span className="brief-label">SENT <Icon name="check" size={12} /></span><p>{submission.task.objective}</p><span className="message-file"><Icon name="file" size={15} />{datasetName(submission.task.dataset)}</span></article>
+      <section className={`conversation ${sentTask ? "has-run" : "is-empty"}`} aria-label="Experiment conversation">
+        {pending ? <div className="thread">
+          <div className="experiment-heading"><span>NEW EXPERIMENT</span><span>{pending.error ? "Needs attention" : "Starting"}</span></div>
+          <article className="user-message"><span className="brief-label">SENT <Icon name="check" size={12} /></span><p>{pending.task.objective}</p><span className="message-file"><Icon name="file" size={15} />{datasetName(pending.task.dataset)}</span></article>
           <article className="assistant-message"><div className="assistant-avatar"><HelixMark size={22} /></div><div className="assistant-content" role="status" aria-live="polite">
-            <div className="response-heading">{submission.error ? "Startup needs attention" : "Preparing your experiment"}{!submission.error && <span className="working-dot" />}</div>
-            {submission.error ? <><p className="inline-error">{submission.error}</p><button className="text-button" disabled={!!active || !!busy} onClick={editSubmission}>Edit message</button></> : <p className="submission-progress">{capability?.status === "checking" ? capability.detail : capability?.status === "verified" ? "Checking data and starting the run…" : "Checking data and getting your agent ready…"}</p>}
+            <div className="response-heading">{pending.error ? "Startup needs attention" : "Preparing your experiment"}{!pending.error && <span className="working-dot" />}</div>
+            {pending.error ? <><p className="inline-error">{pending.error}</p><button className="text-button" disabled={!!active || !!busy} onClick={editSubmission}>Edit message</button></> : <p className="submission-progress">{capability?.status === "checking" ? capability.detail : capability?.status === "verified" ? "Checking data and starting the run…" : "Checking data and getting your agent ready…"}</p>}
           </div></article>
         </div> : run ? <div className="thread" key={run.id}>
           <div className="experiment-heading"><span>EXPERIMENT / {run.id.slice(0, 8)}</span><span>{run.status}</span></div>
@@ -360,9 +366,9 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
       </section>
       <div className={`composer-dock ${sentTask ? "is-collapsed" : ""}`}>
         <div className="composer-width">
-          {active && active.id !== runId && <button className="active-notice" onClick={() => openRun(active)}><span className="working-dot" />An experiment is running<Icon name="chevron" size={14} /></button>}
+          {submission && !pending ? <button className="active-notice" onClick={openSubmission}>{!submission.error && <span className="working-dot" />}{submission.error ? "An experiment needs attention" : "An experiment is starting"}<Icon name="chevron" size={14} /></button> : active && active.id !== runId && <button className="active-notice" onClick={() => openRun(active)}><span className="working-dot" />An experiment is running<Icon name="chevron" size={14} /></button>}
           {(error || connectionError) && !modal && <div className="composer-error" role="alert">{error || connectionError}<button aria-label="Dismiss error" onClick={() => { setError(""); setConnectionError(""); }}><Icon name="close" size={14} /></button></div>}
-          {sentTask && <div className="run-dock"><span><AgentMark agent={sentTask.agent} />{sentTask.agent === "claude" ? "Claude Code" : "Codex"}<span className="run-dock-status">{submission ? submission.error ? "Needs attention" : "Starting" : run?.status}</span></span><button onClick={() => setModal(run ? "run-settings" : "settings")}><Icon name="settings" size={16} />View setup</button></div>}
+          {sentTask && <div className="run-dock"><span><AgentMark agent={sentTask.agent} />{sentTask.agent === "claude" ? "Claude Code" : "Codex"}<span className="run-dock-status">{pending ? pending.error ? "Needs attention" : "Starting" : run?.status}</span></span><button onClick={() => setModal(run ? "run-settings" : "settings")}><Icon name="settings" size={16} />View setup</button></div>}
           <div hidden={!!sentTask}>
           <form ref={composer} className={`composer ${dragging ? "dragging" : ""}`} onSubmit={start}
             onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}

@@ -93,7 +93,10 @@ async page => {
   check(await past.count()===1,'A failed deletion must keep the experiment');
   failDelete=false;await remove.focus();page.once('dialog',dialog=>dialog.accept());await remove.press('Enter');
   await past.waitFor({state:'detached'});
-  check(await page.getByRole('textbox',{name:'Experiment message',exact:true}).isVisible(),'Deleting the open experiment must return to the composer');
+  await page.getByText('Intentional test stop after send',{exact:true}).waitFor();
+  check(await page.getByRole('button',{name:'Edit message',exact:true}).isVisible(),'Deleting an older experiment must preserve a separate failed submission');
+  await page.getByRole('button',{name:'Edit message',exact:true}).click();
+  check(await page.getByRole('textbox',{name:'Experiment message',exact:true}).isVisible(),'The failed submission must remain editable');
   check(await page.getByRole('button',{name:'running experiment',exact:true}).count()===1,'Deleting history must preserve other experiments');
   await page.reload();await page.getByRole('button',{name:'running experiment',exact:true}).waitFor();
   check(await past.count()===0,'Deleted history must stay gone after refresh');
