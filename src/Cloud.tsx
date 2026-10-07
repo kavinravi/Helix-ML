@@ -20,6 +20,7 @@ export default function Cloud() {
   const [code, setCode] = useState("");
   const [retry, setRetry] = useState(0);
   const [loginAttempt, setLoginAttempt] = useState(0);
+  const [agentRevision, setAgentRevision] = useState(0);
   const dialog = useRef<HTMLDialogElement>(null);
   const connection = useMemo<Connection | null>(() => session ? {url: location.origin, token: session.csrf} : null, [session]);
   useEffect(() => {
@@ -58,7 +59,7 @@ export default function Cloud() {
         const value = await api<Login | null>(connection, "/account/provider");
         if (stopped) return;
         if (value?.agent === linking) setLogin(value);
-        if (value?.status === "connected") { setLinking(null); return; }
+        if (value?.status === "connected") { setAgentRevision(value => value + 1); setLinking(null); return; }
         if (value?.status === "failed") { setError("Sign-in did not finish. Please try again."); return; }
       } catch (e) { if (!stopped) setError((e as Error).message); }
       if (!stopped) timer = setTimeout(poll, 2000);
@@ -128,7 +129,7 @@ export default function Cloud() {
   </section></main>;
   if (!ready || !connection) return <main className="account-page"><section className="account-card"><span className="account-wordmark">helix.</span><h1>Opening your workspace</h1><p role="status">Starting the training runtime. Your saved experiments will appear here.</p>{error && <><p role="alert" className="inline-error">{error}</p><button className="primary" onClick={() => setRetry(v => v + 1)}>Try again</button></>}<button className="text-button account-switch" onClick={() => void signOut()}>Sign out</button></section></main>;
   return <>
-    <App cloud={{connection, username: session.username, linkAgent: agent => void linkAgent(agent), signOut: () => void signOut(), expired: () => setSession(null), signInMethods: methods.map(method => ({...method, connect: () => void socialSignIn(method)}))}} />
+    <App cloud={{connection, username: session.username, agentRevision, linkAgent: agent => void linkAgent(agent), signOut: () => void signOut(), expired: () => setSession(null), signInMethods: methods.map(method => ({...method, connect: () => void socialSignIn(method)}))}} />
     {(error || notice) && !linking && <div className="cloud-error" role="status">{error || notice}<button onClick={() => { setError(""); setNotice(""); }}>Dismiss</button></div>}
     <dialog ref={dialog} className="modal provider-modal" onCancel={closeLogin} aria-labelledby="provider-title">
       <div className="modal-content"><header className="modal-header"><h2 id="provider-title">Connect {linking === "codex" ? "Codex" : "Claude Code"}</h2><button className="icon-button" aria-label="Close sign-in" onClick={closeLogin}>×</button></header>

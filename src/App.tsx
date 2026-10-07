@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ComponentProps } from "react";
 import { api, localConnection, validateConnection } from "./api";
-import type { AgentCapability, AgentId, Connection, DatasetInfo, ExportFormat, Metric, Policy, Provider, Run, Task, Tool } from "./types";
+import type { AgentId, Connection, DatasetInfo, ExportFormat, Metric, Policy, Provider, Run, Task, Tool } from "./types";
 
 const defaults: Omit<Task, "agent"> = {
   dataset: "", target: "", objective: "", metric: "accuracy", minutes: 30, trials: 12,
@@ -31,10 +31,14 @@ function HelixMark({ size = 25 }: { size?: number }) {
 function AgentMark({ agent }: { agent: AgentId }) {
   return <img className={`agent-logo ${agent}`} src={`/brands/${agent === "codex" ? "openai" : "claude"}.svg`} width="22" height="22" alt="" />;
 }
+function NumberField({ value, onChange, ...props }: Omit<ComponentProps<"input">, "value" | "onChange" | "type"> & { value: number; onChange: (value: number) => void }) {
+  return <input {...props} type="number" required value={Number.isFinite(value) ? value : ""} onChange={event => onChange(event.currentTarget.valueAsNumber)} />;
+}
+const numberLabel = (value: number) => Number.isFinite(value) ? value : "—";
 type Modal = "settings" | "connection" | "connections" | "run-settings" | null;
 type Artifact = { path: string; size: number };
 
-type CloudAccount = { connection: Connection; username: string; linkAgent: (agent: AgentId) => void; signOut: () => void; expired: () => void; signInMethods: {id: string; name: string; linked: boolean; connect: () => void}[] };
+type CloudAccount = { connection: Connection; username: string; agentRevision: number; linkAgent: (agent: AgentId) => void; signOut: () => void; expired: () => void; signInMethods: {id: string; name: string; linked: boolean; connect: () => void}[] };
 export default function App({ cloud }: { cloud?: CloudAccount }) {
   const [connection, setConnection] = useState<Connection | null>(() => {
     if (cloud) return cloud.connection;
@@ -133,7 +137,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
     };
     void poll();
     return () => { stopped = true; controller.abort(); clearTimeout(timer); };
-  }, [connection]);
+  }, [connection, cloud?.agentRevision]);
   useEffect(() => {
     const desktop = window.matchMedia("(min-width: 1100px)");
     const show = () => {
@@ -179,6 +183,9 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
     if (!task.dataset) throw new Error("Attach a dataset first.");
     if (!task.target.trim()) throw new Error("Enter the target column next to your dataset.");
     if (!task.objective.trim()) throw new Error("Describe your experiment.");
+    if (!Number.isInteger(task.minutes) || task.minutes < 1 || task.minutes > 1440) throw new Error("Enter a time budget between 1 and 1440 minutes in Settings.");
+    if (!Number.isInteger(task.trials) || task.trials < 3 || task.trials > 100) throw new Error("Enter a trial budget between 3 and 100 in Settings.");
+    if (!Number.isFinite(task.testFraction) || (task.validation === "holdout" && !Number.isFinite(task.holdoutFraction))) throw new Error("Enter the split percentages in Settings.");
     const seeds = seedText.split(",").map((value) => Number(value.trim()));
     if (seedText.split(",").some((value) => !/^\d+$/.test(value.trim())) || seeds.length > 5 || new Set(seeds).size !== seeds.length || seeds.some((value) => !Number.isSafeInteger(value) || value < 0 || value > 2 ** 32 - 1)) throw new Error("Use up to five unique 32-bit seeds in Settings.");
     return { ...task, agent: selected, seeds };
@@ -190,28 +197,23 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
     catch (e) { setError((e as Error).message); }
     finally { setBusy(""); }
   };
-  const verifyAgent = async (agent: AgentId, force = false) => {
-    if (!connection) throw new Error("Connect your runner first.");
-    setBusy("verify");
-    const capability = await api<AgentCapability>(connection, `/api/providers/${agent}/verify`, { method: "POST", body: JSON.stringify({ force }), signal: AbortSignal.timeout(240_000) });
-    setProviders((prev) => prev.map((provider) => provider.id === agent ? { ...provider, capability } : provider));
-  };
-  const checkAgent = async (agent: AgentId) => {
-    setError("");
-    try { await verifyAgent(agent, true); }
-    catch (e) { setError((e as Error).message); }
-    finally { setBusy(""); }
-  };
   const start = async (event: FormEvent) => {
     event.preventDefault(); setError("");
     if (!connection) { setModal("connection"); return; }
-    if (!enabled) { setError(selected ? providers.find((value) => value.id === selected)?.detail || "The selected agent is unavailable." : "Choose Codex or Claude Code."); return; }
     if (active || busy || checkingAgent) return;
     if (runtime?.status !== "Ready") { setError(runtime?.description || "Start Docker and run npm run setup."); return; }
     setBusy("start");
     let submitted = false;
     try {
       const nextTask = configuredTask();
+      if (!enabled) {
+        const current = await api<Provider[]>(connection, "/api/providers?refresh=1");
+        setProviders(current);
+        if (!current.find(provider => provider.id === selected)?.authenticated) {
+          if (cloud) { setModal(null); cloud.linkAgent(nextTask.agent); return; }
+          throw new Error(current.find(provider => provider.id === selected)?.detail || "Connect your agent first.");
+        }
+      }
       setSubmission({ task: nextTask }); setRunId(null); update("objective", "");
       submitted = true;
       if (!window.matchMedia("(min-width: 1100px)").matches) setModal(null);
@@ -346,7 +348,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
           {(error || connectionError) && !modal && <div className="composer-error" role="alert">{error || connectionError}<button aria-label="Dismiss error" onClick={() => { setError(""); setConnectionError(""); }}><Icon name="close" size={14} /></button></div>}
           {sentTask && <div className="run-dock"><span><AgentMark agent={sentTask.agent} />{sentTask.agent === "claude" ? "Claude Code" : "Codex"}<span className="run-dock-status">{submission ? submission.error ? "Needs attention" : "Starting" : run?.status}</span></span><button onClick={() => setModal(run ? "run-settings" : "settings")}><Icon name="settings" size={16} />View setup</button></div>}
           <div hidden={!!sentTask}>
-          <button className="protocol-strip" aria-label="Edit experiment protocol" onClick={() => setModal("settings")}><span className="protocol-label">PROTOCOL</span><span>{task.metric === "log_loss" ? "Log loss" : task.metric.toUpperCase()}</span><span>{task.validation === "cv" ? `${task.folds}-fold CV` : "Fixed split"}</span><span>{task.minutes} min</span><span>{task.trials} trials</span><Icon name="settings" size={13} /></button>
+          <button className="protocol-strip" aria-label="Edit experiment protocol" onClick={() => setModal("settings")}><span className="protocol-label">PROTOCOL</span><span>{task.metric === "log_loss" ? "Log loss" : task.metric.toUpperCase()}</span><span>{task.validation === "cv" ? `${task.folds}-fold CV` : "Fixed split"}</span><span>{numberLabel(task.minutes)} min</span><span>{numberLabel(task.trials)} trials</span><Icon name="settings" size={13} /></button>
           <form ref={composer} className={`composer ${dragging ? "dragging" : ""}`} onSubmit={start}
             onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
             onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
@@ -382,8 +384,13 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
           {connection && <button className="text-button" type="button" onClick={() => { setConnection(null); setProviders([]); setTools([]); setRuns([]); setRunId(null); setSelected(""); setConnectionError(""); setModal(null); sessionStorage.removeItem("helix-connection"); }}>Disconnect</button>}
         </form> : modal === "connections" ? <div className="connection-list">
           <div className="runner-row"><span>{cloud ? `Cloud · ${cloud.username}` : "On this computer"}</span><span>{connection && !connectionError ? <><Icon name="check" size={14} />Connected</> : <button disabled={connecting} onClick={() => cloud ? location.reload() : void connectLocal()}>{connecting ? "Connecting…" : "Reconnect"}</button>}</span></div>
-          {providers.map((provider) => <div className="provider-check" key={provider.id}><div className="tool-row"><AgentMark agent={provider.id} /><div><strong>{provider.name}</strong><p>{cloud && !provider.authenticated ? "Connect your subscription" : provider.detail}</p></div><button className="verify-button" disabled={(!cloud && !provider.authenticated) || !!active || !!busy || checkingAgent} onClick={() => { if (cloud && !provider.authenticated) { setModal(null); cloud.linkAgent(provider.id); } else void checkAgent(provider.id); }}>{cloud && !provider.authenticated ? "Connect" : provider.capability?.status === "checking" ? "Checking…" : provider.capability?.status === "verified" ? "Recheck" : "Verify agent"}</button></div>{provider.authenticated && <p className={`verification-detail ${provider.capability?.status || "unchecked"}`} role="status">{provider.capability?.status === "verified" && <Icon name="check" size={14} />}{provider.capability?.status === "unchecked" || !provider.capability ? "Tests code writing, CPU training and model reload using your subscription." : provider.capability.detail}</p>}</div>)}
-          {error && <div className="inline-error" role="alert">{error}</div>}
+          {providers.map(provider => <div className="provider-check" key={provider.id}>
+            <div className="tool-row"><AgentMark agent={provider.id} /><div><strong>{provider.name}</strong><p>{cloud && !provider.authenticated ? "Connect your subscription" : provider.detail}</p></div>
+              {cloud && !provider.authenticated ? <button className="verify-button" disabled={!!active || !!busy || checkingAgent} onClick={() => { setModal(null); cloud.linkAgent(provider.id); }}>Connect</button> : provider.authenticated && <span className="provider-connected"><Icon name="check" size={14} />Connected</span>}
+            </div>
+            {provider.authenticated && provider.capability?.status === "checking" && <p className="verification-detail" role="status">{provider.capability.detail}</p>}
+            {provider.authenticated && provider.capability?.status === "failed" && <div className="provider-failure"><p role="alert">{provider.name} couldn't start the experiment. Try sending it again.</p><details><summary>Technical details</summary><pre>{provider.capability.detail}</pre></details></div>}
+          </div>)}
           {tools.map((tool) => <details className="tool-detail" key={tool.id}><summary>{tool.name}<span>{tool.status}</span></summary><p>{tool.description}</p></details>)}
           {cloud?.signInMethods.map(method => <div className="runner-row" key={method.id}><span>{method.name} sign-in</span>{method.linked ? <span><Icon name="check" size={14} />Linked</span> : <button onClick={method.connect}>Link account</button>}</div>)}
           {cloud ? <button className="text-button" onClick={cloud.signOut}>Sign out</button> : <button className="text-button advanced-connection" onClick={() => { setError(""); setModal("connection"); }}>Advanced connection</button>}
@@ -406,17 +413,17 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
             </details>
             <section className="settings-section">
               <h3><span>03</span> Evaluation</h3>
-              <div className="field-grid"><label>Validation<select value={settings.validation} onChange={(e) => update("validation", e.target.value as Task["validation"])}><option value="cv">Cross-validation</option><option value="holdout">Fixed split</option></select></label><label>Test split (%)<input type="number" min="0" max="99" step="1" value={Math.round(settings.testFraction * 100)} onChange={(e) => update("testFraction", Number(e.target.value) / 100)} /></label></div>
-              <div className="split-preview" role="img" aria-label={settings.validation === "cv" ? `${developmentPercent}% training, ${100 - developmentPercent}% test` : `${trainPercent}% training, ${validationPercent}% validation, ${100 - developmentPercent}% test`}><span className="split-train" style={{ flexGrow: Math.max(0, trainPercent) }} /><span className="split-validation" style={{ flexGrow: Math.max(0, validationPercent) }} /><span className="split-test" style={{ flexGrow: Math.max(0, 100 - developmentPercent) }} /></div>
-              <div className="split-legend"><span><i className="split-train" />Train <b>{trainPercent}%</b></span>{settings.validation === "holdout" && <span><i className="split-validation" />Validate <b>{validationPercent}%</b></span>}<span><i className="split-test" />Test <b>{100 - developmentPercent}%</b></span></div>
-              <div className="field-grid">{settings.validation === "cv" ? <label>Folds<select value={settings.folds} onChange={(e) => update("folds", Number(e.target.value))}>{[3, 5, 10].map((fold) => <option key={fold} value={fold}>{fold} folds</option>)}</select></label> : <label>Validation (% of train)<input type="number" min="1" max="99" step="1" value={Math.round(settings.holdoutFraction * 100)} onChange={(e) => update("holdoutFraction", Number(e.target.value) / 100)} /></label>}<label>Seed<input value={readOnly ? settings.seeds.join(", ") : seedText} onChange={(e) => setSeedText(e.target.value)} placeholder="42" title="Actual seed values. Separate multiple values with commas." /></label></div>
+              <div className="field-grid"><label>Validation<select value={settings.validation} onChange={(e) => update("validation", e.target.value as Task["validation"])}><option value="cv">Cross-validation</option><option value="holdout">Fixed split</option></select></label><label>Test split (%)<NumberField min="0" max="99" step="1" placeholder="e.g. 20" value={Math.round(settings.testFraction * 100)} onChange={value => update("testFraction", value / 100)} /></label></div>
+              <div className="split-preview" role="img" aria-label={settings.validation === "cv" ? `${numberLabel(developmentPercent)}% training, ${numberLabel(100 - developmentPercent)}% test` : `${numberLabel(trainPercent)}% training, ${numberLabel(validationPercent)}% validation, ${numberLabel(100 - developmentPercent)}% test`}><span className="split-train" style={{ flexGrow: Number.isFinite(trainPercent) ? Math.max(0, trainPercent) : 0 }} /><span className="split-validation" style={{ flexGrow: Number.isFinite(validationPercent) ? Math.max(0, validationPercent) : 0 }} /><span className="split-test" style={{ flexGrow: Number.isFinite(developmentPercent) ? Math.max(0, 100 - developmentPercent) : 0 }} /></div>
+              <div className="split-legend"><span><i className="split-train" />Train <b>{numberLabel(trainPercent)}%</b></span>{settings.validation === "holdout" && <span><i className="split-validation" />Validate <b>{numberLabel(validationPercent)}%</b></span>}<span><i className="split-test" />Test <b>{numberLabel(100 - developmentPercent)}%</b></span></div>
+              <div className="field-grid">{settings.validation === "cv" ? <label>Folds<select value={settings.folds} onChange={(e) => update("folds", Number(e.target.value))}>{[3, 5, 10].map((fold) => <option key={fold} value={fold}>{fold} folds</option>)}</select></label> : <label>Validation (% of train)<NumberField min="1" max="99" step="1" placeholder="e.g. 20" value={Math.round(settings.holdoutFraction * 100)} onChange={value => update("holdoutFraction", value / 100)} /></label>}<label>Seed<input value={readOnly ? settings.seeds.join(", ") : seedText} onChange={(e) => setSeedText(e.target.value)} placeholder="42" title="Actual seed values. Separate multiple values with commas." /></label></div>
               <label>Split by<select value={settings.splitStrategy} onChange={(e) => update("splitStrategy", e.target.value as Task["splitStrategy"])}><option value="independent">Independent rows</option><option value="group">Groups</option><option value="time">Time</option></select></label>
               {settings.splitStrategy === "group" && <label>Group column<input value={settings.groupColumn} onChange={(e) => update("groupColumn", e.target.value)} /></label>}{settings.splitStrategy === "time" && <label>Time column<input value={settings.timeColumn} onChange={(e) => update("timeColumn", e.target.value)} /></label>}
             </section>
             <section className="settings-section">
               <h3><span>04</span> Run budget</h3>
-              <div className="field-grid"><label>Minutes<input type="number" min="1" max="1440" value={settings.minutes} onChange={(e) => update("minutes", Number(e.target.value))} /></label><label>Max trials<input type="number" min="3" max="100" value={settings.trials} onChange={(e) => update("trials", Number(e.target.value))} /></label></div>
-              <div className="workload"><span>Validation fits</span><strong>up to {validationFits}</strong></div>
+              <div className="field-grid"><label>Minutes<NumberField min="1" max="1440" placeholder="e.g. 30" value={settings.minutes} onChange={value => update("minutes", value)} /></label><label>Max trials<NumberField min="3" max="100" placeholder="e.g. 12" value={settings.trials} onChange={value => update("trials", value)} /></label></div>
+              <div className="workload"><span>Validation fits</span><strong>up to {numberLabel(validationFits)}</strong></div>
             </section>
             <details className="settings-section settings-group">
               <summary><h3><span>05</span> Deliverables</h3><span className="group-value">.{settings.output}</span></summary>

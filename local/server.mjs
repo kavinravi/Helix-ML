@@ -112,10 +112,14 @@ export async function createService({
     }).finally(() => { if (active === entry) active = null; });
   };
   let providerCache = null,
+    providerPending = null,
     toolCache = null;
-  const getProviders = async () => {
-    if (!providerCache || Date.now() - providerCache.time > 10_000)
-      providerCache = { time: Date.now(), value: await providers() };
+  const getProviders = async (refresh = false) => {
+    if (refresh) await providerPending;
+    if (refresh || !providerCache || Date.now() - providerCache.time > 10_000) {
+      providerPending ||= providers().then(value => { providerCache = { time: Date.now(), value }; }).finally(() => { providerPending = null; });
+      await providerPending;
+    }
     return providerCache.value.map((provider) => {
       const previous = capabilities.get(provider.id);
       if (previous && previous.status !== "checking" && (!provider.authenticated || previous.version !== provider.version)) capabilities.delete(provider.id);
@@ -124,8 +128,8 @@ export async function createService({
     });
   };
   const verify = async (agent, { force = false, forRun = false } = {}) => {
-    const provider = (await getProviders()).find((p) => p.id === agent);
-    if (!provider?.installed || !provider.authenticated) throw new Error("Sign in to the selected CLI in your terminal before verifying it.");
+    const provider = (await getProviders(true)).find((p) => p.id === agent);
+    if (!provider?.installed || !provider.authenticated) throw new Error(process.env.HELIX_HOSTED_WORKER === "1" ? "Connect your agent in Connections, then send the experiment again." : "Sign in to the selected CLI before starting an experiment.");
     const runtime = await runtimeStatus();
     if (!runtime.ready) throw new Error(runtime.detail);
     if (active || (!forRun && starting)) throw new Error("An experiment is starting or running. Wait before checking an agent.");
@@ -326,7 +330,7 @@ export async function createService({
         return;
       }
       if (path === "/providers" && request.method === "GET")
-        return respond(200, await getProviders());
+        return respond(200, await getProviders(url.searchParams.get("refresh") === "1"));
       const providerCheck = path.match(/^\/providers\/(codex|claude)\/verify$/);
       if (providerCheck && request.method === "POST") {
         if (active || starting) return respond(409, { error: "Pause or stop the current experiment before checking an agent." });
@@ -526,7 +530,7 @@ export async function createService({
     await new Promise((resolveClose) => server.close(resolveClose));
     await release();
   })();
-  return { server, close, token, runs };
+  return { server, close, token, runs, refreshProviders: () => getProviders(true) };
 }
 
 if (

@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
 import { stripVTControlCharacters } from 'node:util';
 import { createService } from '../local/server.mjs';
+import { subscriptionEnvironment } from '../local/agents.mjs';
 
 const token = process.env.HELIX_WORKER_TOKEN;
 if (!/^[A-Za-z0-9_-]{43}$/.test(token || '')) throw new Error('Worker authentication is required.');
@@ -31,7 +32,7 @@ const server = createServer(async (req,res) => {
       stopLogin();
       const state = {public:{agent:body.agent,status:'waiting',url:null,code:null},buffer:''};
       login=state;
-      const child=spawn(body.agent,body.agent==='codex' ? ['login','--device-auth'] : ['auth','login'],{stdio:['pipe','pipe','pipe'],detached:true});
+      const child=spawn(body.agent,body.agent==='codex' ? ['login','--device-auth'] : ['auth','login'],{env:subscriptionEnvironment(),stdio:['pipe','pipe','pipe'],detached:true});
       state.child=child;
       const output=chunk=>{
         state.buffer=(state.buffer+stripVTControlCharacters(chunk.toString())).slice(-16000);
@@ -47,7 +48,11 @@ const server = createServer(async (req,res) => {
       };
       child.stdout.on('data',output); child.stderr.on('data',output);
       const timeout=setTimeout(()=>{ if (login===state) stopLogin(); },300_000);
-      const finish=ok=>{ clearTimeout(timeout); state.buffer=''; state.child=null; state.public.status=ok?'connected':'failed'; state.public.url=null; state.public.code=null; };
+      const finish=async ok=>{
+        clearTimeout(timeout); state.buffer=''; state.child=null; state.public.url=null; state.public.code=null;
+        const providers=ok ? await service.refreshProviders().catch(()=>[]) : [];
+        state.public.status=providers.some(provider=>provider.id===body.agent && provider.authenticated)?'connected':'failed';
+      };
       child.once('error',()=>finish(false)); child.once('close',code=>finish(code===0));
       return reply(res,200,state.public);
     }

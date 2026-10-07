@@ -77,6 +77,10 @@ export function agentArguments(id, workspace, context, prompt) {
       "--ignore-user-config",
       "--ignore-rules",
       "--ephemeral",
+      // Every invocation includes Helix's contract. Avoid scanning unrelated AGENTS.md
+      // files through a nested namespace that hosted runtimes may not support.
+      "-c",
+      "project_doc_max_bytes=0",
       "-c",
       'approval_policy="never"',
       "-c",

@@ -86,6 +86,8 @@ test("runner validates configuration, isolates files, and enforces lifecycle bou
       assert.throws(() => malformed.finish(), /malformed/);
     }
     assert.ok(agentArguments("codex", root, join(root, "context.json"), "test").includes("--ignore-user-config"));
+    assert.ok(agentArguments("codex", root, join(root, "context.json"), "test").includes("project_doc_max_bytes=0"));
+    assert.ok(agentArguments("codex", root, join(root, "context.json"), "test").includes('permissions.helix.network.enabled=false'));
     assert.ok(agentArguments("claude", root, join(root, "context.json"), "test").includes("--restricted"));
     assert.equal(subscriptionEnvironment().OPENAI_API_KEY, undefined);
     await writeFile(join(root, "run.json"), JSON.stringify({ task, trials: [] }));
@@ -321,7 +323,7 @@ if (name === 'npm') {
   if (process.env.HELIX_TEST_CLI_MODE === 'missing-docker') process.exit(1);
   if (args[0] === 'image') console.log('2 sha256:${"a".repeat(64)}');
 } else if (args[0] === '--version') console.log(name + ' test-version');
-else if (args[0] === 'login') console.log('Logged in using ChatGPT');
+else if (args[0] === 'login') { if (process.env.HELIX_TEST_CLI_MODE === 'signed-out') { console.error('Not logged in'); process.exit(1); } console.log('Logged in using ChatGPT'); }
 else if (args[0] === 'auth') console.log(JSON.stringify({loggedIn:true,authMethod:'claude.ai'}));
 else {
   // A successful CLI completion alone must never count as a working harness.
@@ -359,6 +361,10 @@ else {
     const headers = { Authorization: `Bearer ${service.token}`, "Content-Type": "application/json" };
     const post = (path, body = {}) => fetch(url + path, { method: "POST", headers, body: JSON.stringify(body) });
     const status = async () => (await (await fetch(url + "/providers", { headers })).json()).find(p => p.id === "codex").capability.status;
+    process.env.HELIX_TEST_CLI_MODE = "signed-out";
+    assert.equal((await service.refreshProviders()).find(p => p.id === "codex").authenticated, false);
+    process.env.HELIX_TEST_CLI_MODE = "ready";
+    assert.equal((await (await fetch(url + "/providers?refresh=1", { headers })).json()).find(p => p.id === "codex").authenticated, true, "A completed login must bypass the signed-out cache immediately");
     assert.equal((await fetch(url + "/providers/codex/verify", { method: "POST", body: "{}" })).status, 401);
     assert.equal((await post("/providers/invalid/verify")).status, 404);
     assert.equal((await post("/providers/codex/verify", { force: "yes" })).status, 400);
