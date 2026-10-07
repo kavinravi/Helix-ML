@@ -60,6 +60,8 @@ try {
   assert.throws(() => aggregateScores([{ score: 1 }], 2), /Every requested/);
   const { output: image } = await runProcess("docker", ["image", "inspect", IMAGE, "--format", "{{.Id}}"]);
   for (const modality of ["tabular", "text", "image", "audio"]) {
+    // Exercise preparation, every fold, final fitting and export without a time cap.
+    const deadline = modality === "tabular" ? null : Date.now() + 180_000;
     const run = { id: randomUUID(), task: { dataset: join(root, modality), target: "label", metric: "accuracy", validation: "cv", folds: 3,
       seeds: [42, 17], splitStrategy: "independent", assetColumns: modality === "tabular" ? [] : ["asset"],
       searchModels: false, model: "decision tree", exportModel: modality === "tabular", exportFormat: "joblib", output: modality === "tabular" ? "ipynb" : "py", policy: { features: true, augmentation: false, pretrained: false, ensemble: false, tuning: false, regularization: false } } };
@@ -190,7 +192,7 @@ for epoch in range(5):
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 1000);
   try {
-    await assert.rejects(container(context, ["python", "-c", "import time; time.sleep(60)"], { signal: abort.signal }), /Interrupted/);
+    await assert.rejects(container({ ...context, deadline: null }, ["python", "-c", "import time; time.sleep(60)"], { signal: abort.signal }), /Interrupted/);
   } finally { clearTimeout(timer); }
   const remaining = await runProcess("docker", ["ps", "-aq", "--filter", `label=helix.run=${context.runId}`]);
   assert.equal(remaining.output.trim(), "");

@@ -169,6 +169,13 @@ h1 { font-family: "Source Serif 4", Georgia, serif; font-weight: 400; letter-spa
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
 .field-grid > label { margin: 0 !important; }
 .check-label { flex-direction: row; align-items: center; gap: 9px; font-size: 12px; }
+.field-tag { font-size: 10px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+.field-note { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 10px 0; }
+.field-note[role="alert"] { color: #edb4a2; }
+.budget-limit { min-width: 0; }
+.budget-limit > input { margin-top: 9px; }
+.budget-limit > .field-note { display: block; margin: 3px 0 0; }
+.budget-fields > .field-note { margin-bottom: 0; }
 .settings-detail { margin-top: 18px; }
 .settings-detail > summary { display: flex; align-items: center; color: #bbc8ac; font-size: 12px; padding: 2px 0; }
 .settings-detail[open] > summary { margin-bottom: 15px; }
@@ -413,9 +420,9 @@ h1 { font-family: "Source Serif 4", Georgia, serif; font-weight: 400; letter-spa
 .followup-toolbar { display: flex; align-items: center; gap: 12px; }
 .followup-toolbar > select { width: auto; padding: 6px 8px; font-size: 12px; }
 .followup-toolbar .send-button { width: 32px; height: 32px; margin-left: auto; font-size: 22px; }
-.followup-budget { display: flex; gap: 10px; }
-.followup-budget label { flex-direction: row; align-items: center; gap: 6px; font-size: 11px; }
-.followup-budget input { width: 65px; padding: 6px; font-size: 12px; }
+.followup-toolbar { flex-wrap: wrap; }
+.followup-toolbar .budget-fields { order: 3; width: 100%; padding-top: 8px; }
+.followup-toolbar .budget-limit > input { padding: 6px; font-size: 12px; }
 .followup-composer + .run-dock { border-top: 0; min-height: 36px; }
 .followup-turn { margin-top: 30px; }
 .followup-turn .user-message { margin-bottom: 18px; }
@@ -443,7 +450,6 @@ h1 { font-family: "Source Serif 4", Georgia, serif; font-weight: 400; letter-spa
 .plot-values th:last-child, .plot-values td:last-child { text-align: right; font-family: var(--mono); }
 @media (max-width: 650px) {
   .followup-toolbar { flex-wrap: wrap; gap: 8px; }
-  .followup-budget { order: 3; width: 100%; }
   .metric-plot { padding: 10px 6px; }
 }
 

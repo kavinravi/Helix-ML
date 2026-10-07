@@ -423,7 +423,7 @@ export async function createService({
                 const child = await continueRun(runRoot, run, message.message, body.minutes, body.trials);
                 runs.set(child.id, child);
                 message.childRunId = child.id;
-                message.reply = `Started up to ${body.trials} additional trials from the selected model, with a ${body.minutes}-minute budget. The original result is saved.`;
+                message.reply = `Started ${body.trials === null ? "additional trials" : `up to ${body.trials} additional trials`} from the selected model, ${body.minutes === null ? "with no time limit" : `with a ${body.minutes}-minute budget`}. The original result is saved.`;
                 launch(child);
               } else {
                 const provider = (await getProviders(true)).find(value => value.id === run.task.agent);
@@ -455,7 +455,7 @@ export async function createService({
                 const final = JSON.parse(await readFile(join(runRoot, run.id, "final-test.json"), "utf8").catch(() => "{}"));
                 if (final.status !== "completed") throw new Error("Final evaluation was interrupted or failed. Start a new experiment; the final fit cannot be retried.");
               }
-              if (elapsed(run) >= run.task.minutes * 60) throw new Error("This run used its time budget. Start a new experiment with a larger budget.");
+              if (run.task.minutes !== null && elapsed(run) >= run.task.minutes * 60) throw new Error("This run used its time budget. Start a new experiment with a larger budget.");
               starting = true;
               try {
                 await ready(run.task.agent);

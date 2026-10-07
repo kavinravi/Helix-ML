@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
 
+// null is an explicitly disabled time limit and survives persisted/MCP contexts.
+export const expired = (deadline) => deadline !== null && Date.now() >= deadline;
+export const remainingTime = (deadline) => deadline === null ? null : Math.max(1, deadline - Date.now());
+
 export function runProcess(
   command,
   args,
@@ -30,7 +34,7 @@ export function runProcess(
         }
       }
     };
-    const timer = setTimeout(stop, timeout);
+    const timer = timeout === null ? null : setTimeout(stop, timeout);
     signal?.addEventListener("abort", stop, { once: true });
     child.stdout.on("data", (chunk) => {
       output = (output + chunk.toString()).slice(-2_000_000);

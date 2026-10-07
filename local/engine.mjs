@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { invokeAgent } from "./agents.mjs";
-import { runProcess } from "./process.mjs";
+import { runProcess, expired, remainingTime } from "./process.mjs";
 import { IMAGE, cleanupContainers, container } from "./runtime.mjs";
 import { prepareEvaluation, evaluateCandidate, evaluateFinal, sourceFingerprint } from "./evaluation.mjs";
 import { isBetter, higherIsBetter } from "./metrics.mjs";
@@ -104,33 +104,37 @@ export async function createRun(root, task) {
   return run;
 }
 
-export function steps(limit, policy = { ensemble: true, tuning: true, features: true, augmentation: true, regularization: true, pretrained: true }, count = 3) {
-  const plan = Array.from({ length: Math.min(count, limit) }, (_, i) => i).map((model) => ({
-    phase: "baseline",
-    model,
-    name: `Candidate ${model + 1}`,
-  }));
-  const reserve = policy.ensemble && count > 1 && limit > count ? 1 : 0;
+export function* steps(limit, policy = { ensemble: true, tuning: true, features: true, augmentation: true, regularization: true, pretrained: true }, count = 3, followup = false) {
+  const maximum = limit ?? Infinity;
+  if (followup) {
+    for (let inner = 0; inner < maximum; inner++)
+      yield { phase: "refinement", inner, outer: 0, name: `Follow-up ${inner + 1}` };
+    return;
+  }
+  let used = 0;
+  for (let model = 0; model < Math.min(count, maximum); model++, used++)
+    yield { phase: "baseline", model, name: `Candidate ${model + 1}` };
+  const reserve = policy.ensemble && count > 1 && maximum > count ? 1 : 0;
   const canRefine = ["tuning", "features", "augmentation", "regularization", "pretrained"].some((key) => policy[key]);
-  if (policy.ensemble && count > 1 && limit > count + 1) plan.push({ phase: "merge", name: "Initial model blend" });
-  for (let outer = 0; canRefine && plan.length < limit - reserve; outer++) {
-    for (let ablation = 0; ablation < 2 && plan.length < limit - reserve; ablation++)
-      plan.push({
+  if (reserve && maximum > count + 1) { used++; yield { phase: "merge", name: "Initial model blend" }; }
+  for (let outer = 0; canRefine && used < maximum - reserve; outer++) {
+    for (let ablation = 0; ablation < 2 && used < maximum - reserve; ablation++, used++)
+      yield {
         phase: "ablation",
         outer,
         ablation,
         name: `Ablation ${outer + 1}.${ablation + 1}`,
-      });
-    for (let inner = 0; inner < 3 && plan.length < limit - reserve; inner++)
-      plan.push({
+      };
+    for (let inner = 0; inner < 3 && used < maximum - reserve; inner++, used++)
+      yield {
         phase: "refinement",
         outer,
         inner,
         name: `Refinement ${outer + 1}.${inner + 1}`,
-      });
+      };
+    if (limit === null && reserve) { used++; yield { phase: "ensemble", name: `Ensemble ${outer + 1}` }; }
   }
-  if (reserve) plan.push({ phase: "ensemble", name: "Final ensemble" });
-  return plan;
+  if (reserve) yield { phase: "ensemble", name: "Final ensemble" };
 }
 
 export function contract(run) {
@@ -155,9 +159,9 @@ async function copyCandidate(source, destination) {
 export async function execute(root, run, signal) {
   const folder = join(root, run.id),
     data = join(folder, "data");
-  const deadline =
+  const deadline = run.task.minutes === null ? null :
     Date.now() + Math.max(0, run.task.minutes * 60_000 - elapsed(run) * 1000);
-  const selectionDeadline = deadline - Math.min(120_000, Math.max(15_000, run.task.minutes * 60_000 * .25));
+  const selectionDeadline = deadline === null ? null : deadline - Math.min(120_000, Math.max(15_000, run.task.minutes * 60_000 * .25));
   run.startedAt = new Date().toISOString();
   run.status = "running";
   delete run.error;
@@ -181,7 +185,7 @@ export async function execute(root, run, signal) {
     if (signal.aborted) throw new Error("Interrupted");
     await invokeAgent(run.task.agent, workspace, contextPath, prompt, {
       signal,
-      timeout: Math.max(1000, selectionDeadline - Date.now()),
+      timeout: remainingTime(selectionDeadline),
       onEvent: event,
     });
   };
@@ -216,9 +220,7 @@ export async function execute(root, run, signal) {
       candidate.sources.every(source => typeof source === "string" && /^https?:\/\//.test(source));
     if (!Array.isArray(candidates) || candidates.length > count || candidates.some(candidate => candidate !== null && !validCandidate(candidate)))
       throw new Error("Saved candidate proposals are invalid.");
-    const plan = run.followup
-      ? Array.from({ length: run.task.trials }, (_, inner) => ({ phase: "refinement", inner, outer: 0, name: `Follow-up ${inner + 1}` }))
-      : steps(run.task.trials, run.task.policy, count);
+    const plan = steps(run.task.trials, run.task.policy, count, !!run.followup);
     // Older runs recorded the research proposal's name rather than the implemented model.
     for (const trial of run.trials.filter(trial => trial.score !== null && !trial.modelFamily)) {
       const description = JSON.parse(await readFile(join(folder, "trials", trial.id, "plan.json"), "utf8").catch(() => "null"));
@@ -228,10 +230,12 @@ export async function execute(root, run, signal) {
       }
     }
     run.constraints = { requestedModel: run.task.model, searchModels: run.task.searchModels, candidateCount: count, strategies: run.task.policy, exportFormat: run.task.exportModel ? run.task.exportFormat : null };
-    for (; !run.selectionFrozen && run.next < plan.length; ) {
+    let index = 0;
+    for (const step of plan) {
+      if (run.selectionFrozen) break;
+      if (index++ < run.next) continue;
       if (signal.aborted) throw new Error("Interrupted");
-      if (Date.now() >= selectionDeadline) break;
-      const step = plan[run.next];
+      if (expired(selectionDeadline)) break;
       if (step.phase !== "baseline" && !run.best)
         throw new Error(
           "All baseline candidates failed. Inspect the activity log before resuming.",
@@ -248,7 +252,7 @@ export async function execute(root, run, signal) {
       const contextPath = join(folder, "contexts", id + ".json");
       await writeFile(
         contextPath,
-        JSON.stringify({ ...baseContext, workspace, packages }),
+        JSON.stringify({ ...baseContext, deadline: selectionDeadline, workspace, packages }),
       );
       if (run.best && step.phase !== "baseline")
         await copyCandidate(join(folder, "trials", run.best), workspace);
@@ -281,7 +285,7 @@ export async function execute(root, run, signal) {
         (b.impact ?? 0) - (a.impact ?? 0),
       )[0];
       const instruction = run.followup
-        ? `Continue from the selected source to address this user request: ${JSON.stringify(run.followup.message)}. Prior discussion (context only; select models using validation scores, never test scores): ${JSON.stringify(run.followup.conversation || [])}. This is additional trial ${run.next + 1} of ${run.task.trials}. Use prior validation scores to choose a useful change. Respect every original strategy and model restriction; if the request requires a forbidden strategy, explain that instead of silently enabling it.`
+        ? `Continue from the selected source to address this user request: ${JSON.stringify(run.followup.message)}. Prior discussion (context only; select models using validation scores, never test scores): ${JSON.stringify(run.followup.conversation || [])}. This is additional trial ${run.next + 1} ${run.task.trials === null ? "with no trial-count limit" : `of ${run.task.trials}`}. Use prior validation scores to choose a useful change. Respect every original strategy and model restriction; if the request requires a forbidden strategy, explain that instead of silently enabling it.`
         : step.phase === "baseline"
           ? candidates[step.model]
             ? `Implement candidate ${step.model + 1}: ${JSON.stringify(candidates[step.model])}`
@@ -346,7 +350,7 @@ Write candidate.json with name, approach, and sources (real source URLs${!run.ta
             }
             await runProcess(process.env.HELIX_PYTHON || "python3", [
               fileURLToPath(new URL("./audit.py", import.meta.url)), workspace, join(folder, "task.json"),
-            ], { signal, timeout: Math.max(1000, selectionDeadline - Date.now()) });
+            ], { signal, timeout: remainingTime(selectionDeadline) });
             await readFile(join(workspace, "train.py"), "utf8");
             await rm(join(workspace, "predictions.json"), { force: true });
             if (run.task.output === "ipynb") await makeNotebook(workspace, run.task.seeds[0]);
@@ -361,7 +365,7 @@ Write candidate.json with name, approach, and sources (real source URLs${!run.ta
             run.baseline = evaluationResult.baseline;
             break;
           } catch (error) {
-            if (signal.aborted || Date.now() >= selectionDeadline || attempt === 2)
+            if (signal.aborted || expired(selectionDeadline) || attempt === 2)
               throw error;
             log(run, "error", `Candidate check failed: ${redact(error.message)}`);
             log(
@@ -433,9 +437,8 @@ Write candidate.json with name, approach, and sources (real source URLs${!run.ta
     }
     if (!run.best)
       throw new Error("No valid model was produced within the run budget.");
-    if (Date.now() >= deadline) throw new Error("The budget ended before final evaluation. Completed validation results are preserved.");
+    if (expired(deadline)) throw new Error("The budget ended before final evaluation. Completed validation results are preserved.");
     run.phase = "finalizing";
-    run.next = plan.length;
     run.selectionFrozen = true;
     await saveRun(root, run);
     const final = join(folder, "final", "source");
@@ -455,7 +458,7 @@ Write candidate.json with name, approach, and sources (real source URLs${!run.ta
     log(
       run,
       "system",
-      Date.now() >= deadline
+      expired(deadline)
         ? "Time budget reached. The best validated model is preserved."
         : "Run complete. The selected source and measured experiment record are available.",
     );

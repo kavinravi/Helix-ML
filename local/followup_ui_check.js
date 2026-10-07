@@ -61,11 +61,13 @@ async page => {
   await page.getByRole('spinbutton',{name:'Minutes',exact:true}).fill('');
   check(await page.getByRole('spinbutton',{name:'Minutes',exact:true}).inputValue()==='','Budget field should clear');
   await page.getByRole('spinbutton',{name:'Minutes',exact:true}).fill('5');
-  await page.getByRole('spinbutton',{name:'Trials',exact:true}).fill('1');
+  await page.getByRole('spinbutton',{name:'Max trials',exact:true}).fill('1');
+  await page.getByRole('checkbox',{name:'Max time',exact:true}).uncheck();
+  check(await page.getByRole('spinbutton',{name:'Minutes',exact:true}).isDisabled(),'Trial-only follow-ups must disable time');
   await composer.fill('Try a shallower tree');
   await page.getByRole('button',{name:'Send follow-up',exact:true}).click();
   await page.getByText('SENDING',{exact:true}).waitFor();
-  check(requestBody.mode==='trials'&&requestBody.trials===1&&requestBody.minutes===5,'Send explicit additional-trial budget');
+  check(requestBody.mode==='trials'&&requestBody.trials===1&&requestBody.minutes===null,'Send explicit additional-trial budget');
   release();await page.getByText('Preparing more trials…',{exact:true}).waitFor();
   const child={...structuredClone(run),id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',messages:[],followup:{parentId:run.id,message:'Try a shallower tree',protocolHash:'same'},testScore:null,trainingHistory:[{step:1,loss:.8,accuracy:.6},{step:2,loss:.4,accuracy:.8},{step:3,loss:.2,accuracy:.95}]};
   runs=[child,run];Object.assign(run.messages[1],{status:'completed',reply:'Started one additional trial. The original result is saved.',childRunId:child.id});

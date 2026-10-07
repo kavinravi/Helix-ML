@@ -26,13 +26,15 @@ export function validateTask(body) {
   if (!METRICS.includes(body.metric))
     throw new Error("Select a supported validation metric.");
   if (
-    !Number.isInteger(body.minutes) ||
+    body.minutes !== null && (!Number.isInteger(body.minutes) ||
     body.minutes < 1 ||
-    body.minutes > 1440
+    body.minutes > 1440)
   )
     throw new Error("The time budget must be between 1 and 1440 minutes.");
-  if (!Number.isInteger(body.trials) || body.trials < 1 || body.trials > 100)
+  if (body.trials !== null && (!Number.isInteger(body.trials) || body.trials < 1 || body.trials > 100))
     throw new Error("The trial budget must be between 1 and 100.");
+  if (body.minutes === null && body.trials === null)
+    throw new Error("Enable at least one run limit: max time or max trials.");
   if (
     typeof body.searchModels !== "boolean" ||
     typeof body.model !== "string" ||

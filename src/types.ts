@@ -50,8 +50,8 @@ export interface Task {
   target: string;
   objective: string;
   metric: Metric;
-  minutes: number;
-  trials: number;
+  minutes: number | null;
+  trials: number | null;
   searchModels: boolean;
   model: string;
   output: "py" | "ipynb";

@@ -17,13 +17,15 @@ import { spawn } from "node:child_process";
 import { createService } from "./server.mjs";
 import { validateTask, inside } from "./validate.mjs";
 import { scorePredictions, isBetter } from "./metrics.mjs";
-import { runProcess } from "./process.mjs";
+import { runProcess, expired, remainingTime } from "./process.mjs";
 import { agentStream, agentArguments, subscriptionEnvironment } from "./agents.mjs";
 import { availableTools, callTool } from "./tools.mjs";
-import { steps, createRun, loadRuns, saveRun } from "./engine.mjs";
+import { steps as iterateSteps, createRun, loadRuns, saveRun } from "./engine.mjs";
 import { aggregateScores } from "./evaluation.mjs";
 import { matchingPredictions } from "./export.mjs";
 import { readinessKey } from "./readiness.mjs";
+
+const steps = (...args) => Array.from(iterateSteps(...args));
 
 test("runner validates configuration, isolates files, and enforces lifecycle boundaries", async () => {
   const root = await mkdtemp(join(tmpdir(), "helix-check-"));
@@ -61,6 +63,37 @@ test("runner validates configuration, isolates files, and enforces lifecycle bou
       },
     };
     assert.deepEqual(validateTask(task), task);
+    assert.equal(validateTask({ ...task, minutes: null }).minutes, null);
+    assert.equal(validateTask({ ...task, trials: null }).trials, null);
+    assert.throws(() => validateTask({ ...task, minutes: null, trials: null }), /at least one/);
+    for (const key of ['minutes', 'trials']) for (const value of [undefined, NaN, 0, -1, 1.5, '5'])
+      assert.throws(() => validateTask({ ...task, [key]: value }), /budget/);
+    const unlimited = JSON.parse(JSON.stringify({ deadline: null }));
+    assert.equal(expired(unlimited.deadline), false);
+    assert.equal(remainingTime(unlimited.deadline), null);
+    assert.equal(expired(Date.now() - 1), true);
+    assert.equal(remainingTime(Date.now() - 1), 1);
+    assert.equal((await runProcess(process.execPath, ['-e', 'setTimeout(() => console.log("done"), 50)'], { timeout: null })).output.trim(), 'done');
+    const interrupt = new AbortController();
+    const pendingProcess = runProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { timeout: null, signal: interrupt.signal });
+    setTimeout(() => interrupt.abort(), 50);
+    await assert.rejects(pendingProcess, /Interrupted/);
+    await assert.rejects(runProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { timeout: 50 }), /Time limit/);
+    for (const limit of [1, 2, 3, 4, 5, 12, 100]) {
+      const plan = steps(limit);
+      assert.equal(plan.length, limit);
+      if (limit > 3) assert.equal(plan.at(-1).phase, 'ensemble');
+    }
+    const timeOnly = iterateSteps(null), resumed = iterateSteps(null);
+    for (let index = 0; index < 150; index++) {
+      const next = timeOnly.next();
+      assert.equal(next.done, false, 'No hidden trial ceiling');
+      assert.deepEqual(resumed.next(), next, 'Scheduling must remain deterministic after restart');
+    }
+    const more = iterateSteps(null, task.policy, 1, true);
+    for (let index = 0; index < 150; index++) assert.equal(more.next().value.inner, index);
+    assert.equal(steps(null, Object.fromEntries(Object.keys(task.policy).map(key => [key, false])), 1).length, 1, 'Never invent forbidden strategies to fill a budget');
+
     assert.equal(validateTask({ ...task, testFraction: 0 }).testFraction, 0);
     for (const value of [-0.1, 1, NaN, "0.2"]) assert.throws(() => validateTask({ ...task, testFraction: value }), /test split/);
     assert.throws(() => validateTask({ ...task, holdoutFraction: 0 }), /validation split/);
@@ -96,7 +129,7 @@ test("runner validates configuration, isolates files, and enforces lifecycle bou
       { id: "trial-002", name: "Diagnostic ablation", phase: "ablation", status: "rejected", score: .8, baseTrial: "trial-001", baseScore: .7, component: "scaling", impact: -.1 },
     ] };
     await writeFile(join(root, "run.json"), JSON.stringify(history));
-    const feedback = await callTool("previous_experiments", {}, { runFile: join(root, "run.json"), deadline: Date.now() + 1000 });
+    const feedback = await callTool("previous_experiments", {}, { runFile: join(root, "run.json"), deadline: null });
     assert.equal(feedback.selectedTrial, "trial-001", "The diagnostic raw winner must not replace the selected model in feedback");
     assert.equal(feedback.trials[1].baseTrial, "trial-001");
     assert.equal(feedback.trials[1].status, "rejected");
@@ -289,7 +322,7 @@ test("runner validates configuration, isolates files, and enforces lifecycle bou
     lifecycle.elapsed = task.minutes * 60;
     const act = (action) => fetch(`${url}/api/runs/${lifecycle.id}/action`, { method: "POST", headers, body: JSON.stringify({ action }) });
     assert.match((await (await act("resume")).json()).error, /time budget/);
-    lifecycle.elapsed = 1;
+    lifecycle.task = { ...task, minutes: null };
     lifecycle.selectionFrozen = true;
     assert.match((await (await act("resume")).json()).error, /Final evaluation/);
     assert.equal((await (await act("stop")).json()).status, "stopped");

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { runProcess } from "./process.mjs";
+import { runProcess, expired, remainingTime } from "./process.mjs";
 import { container, IMAGE } from "./runtime.mjs";
 import { scorePredictions } from "./metrics.mjs";
 import { harness, verifyExport } from "./export.mjs";
@@ -27,7 +27,7 @@ export async function prepareEvaluation(root, run, { signal, deadline }) {
   const taskFile = join(folder, "task.json");
   await writeFile(taskFile, JSON.stringify(run.task), { mode: 0o600 });
   await runProcess(python(), [preparer, "--task", taskFile, "--output", join(folder, "evaluation")], {
-    signal, timeout: Math.max(1, deadline - Date.now()),
+    signal, timeout: remainingTime(deadline),
   });
   return json(join(folder, "evaluation", "manifest.json"));
 }
@@ -79,7 +79,7 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
   let baselineName, trainingHistory;
   for (const fold of folds) {
     if (signal?.aborted) throw new Error("Interrupted");
-    if (Date.now() >= deadline) throw new Error("Time limit reached before the evaluation protocol finished.");
+    if (expired(deadline)) throw new Error("Time limit reached before the evaluation protocol finished.");
     const scratch = join(folder, "fits", candidateId, fold.id);
     await rm(scratch, { recursive: true, force: true });
     await mkdir(scratch, { recursive: true, mode: 0o700 });
@@ -88,7 +88,7 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
     const started = Date.now();
     try {
       await runProcess(python(), [preparer, "--evaluation", evaluation, "--output", data, "--fold", final && run.followup ? "refit" : fold.id, "--truth", truthPath], {
-        signal, timeout: Math.max(1, deadline - Date.now()),
+        signal, timeout: remainingTime(deadline),
       });
       const config = {
         metric: run.task.metric, seed: fold.seed, policy: run.task.policy,

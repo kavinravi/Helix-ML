@@ -1,6 +1,6 @@
 import { readFile, readdir, mkdir, writeFile, lstat } from "node:fs/promises";
 import { join } from "node:path";
-import { runProcess } from "./process.mjs";
+import { runProcess, expired } from "./process.mjs";
 import { container, IMAGE } from "./runtime.mjs";
 import { inside } from "./validate.mjs";
 
@@ -146,7 +146,7 @@ export async function callTool(name, args, context) {
   const run = JSON.parse(await readFile(context.runFile, "utf8"));
   if (!availableTools(run.task, context.mode).some((tool) => tool.name === name))
     throw new Error("This tool is disabled by the experiment's model or strategy permissions.");
-  if (Date.now() >= context.deadline)
+  if (expired(context.deadline))
     throw new Error("The run budget has expired.");
   switch (name) {
     case "read_source": {

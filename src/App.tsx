@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ComponentProps } from "react";
 import RunPlots from "./RunPlots";
+import BudgetFields from "./BudgetFields";
 import FollowupComposer, { type Followup } from "./FollowupComposer";
 import { api, localConnection, validateConnection } from "./api";
 import type { AgentId, Connection, DatasetInfo, ExportFormat, Metric, Policy, Provider, Run, Task, Tool } from "./types";
@@ -96,7 +97,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
   const settings = readOnly && run ? { ...defaults, ...run.task } : task;
   const settingsVisible = modal === "settings" || readOnly;
   const seedCount = (readOnly ? settings.seeds.join(",") : seedText).split(",").filter((value) => /^\d+$/.test(value.trim())).length;
-  const validationFits = settings.trials * (settings.validation === "cv" ? settings.folds : 1) * seedCount;
+  const validationFits = (settings.trials ?? 1) * (settings.validation === "cv" ? settings.folds : 1) * seedCount;
   const developmentPercent = 100 - Math.round(settings.testFraction * 100);
   const validationPercent = settings.validation === "holdout" ? Math.round(developmentPercent * settings.holdoutFraction * 10) / 10 : 0;
   const trainPercent = Math.round((developmentPercent - validationPercent) * 10) / 10;
@@ -196,8 +197,9 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
     if (!task.dataset) throw new Error("Attach a dataset first.");
     if (!task.target.trim()) throw new Error("Enter the target column in Settings.");
     if (!task.objective.trim()) throw new Error("Describe your experiment.");
-    if (!Number.isInteger(task.minutes) || task.minutes < 1 || task.minutes > 1440) throw new Error("Enter a time budget between 1 and 1440 minutes in Settings.");
-    if (!Number.isInteger(task.trials) || task.trials < 1 || task.trials > 100) throw new Error("Enter a trial budget between 1 and 100 in Settings.");
+    if (task.minutes === null && task.trials === null) throw new Error("Enable max time or max trials in Settings.");
+    if (task.minutes !== null && (!Number.isInteger(task.minutes) || task.minutes < 1 || task.minutes > 1440)) throw new Error("Enter a time budget between 1 and 1440 minutes in Settings.");
+    if (task.trials !== null && (!Number.isInteger(task.trials) || task.trials < 1 || task.trials > 100)) throw new Error("Enter a trial budget between 1 and 100 in Settings.");
     if (!Number.isFinite(task.testFraction) || (task.validation === "holdout" && !Number.isFinite(task.holdoutFraction))) throw new Error("Enter the split percentages in Settings.");
     const seeds = seedText.split(",").map((value) => Number(value.trim()));
     if (seedText.split(",").some((value) => !/^\d+$/.test(value.trim())) || seeds.length > 5 || new Set(seeds).size !== seeds.length || seeds.some((value) => !Number.isSafeInteger(value) || value < 0 || value > 2 ** 32 - 1)) throw new Error("Use up to five unique 32-bit seeds in Settings.");
@@ -451,18 +453,18 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
         </div> : <form onSubmit={(e) => { e.preventDefault(); setModal(null); }}>
           <div className="settings-body"><fieldset disabled={readOnly || !!active || !!busy}>
             <section className="settings-section">
-              <h3><span>01</span> Dataset</h3>
+              <h3><span>01</span> Dataset <small className="field-tag">Required</small></h3>
               {settings.dataset && <div className="setup-dataset"><Icon name="file" size={17} /><span title={settings.dataset}>{datasetName(settings.dataset)}</span>{datasetInfo && <span>{datasetInfo.rows.toLocaleString()} rows</span>}</div>}
               {!readOnly && <div className="dataset-actions"><button type="button" onClick={() => chooseUpload()}><Icon name="plus" size={14} />{settings.dataset ? "Replace CSV" : "Choose CSV"}</button><button type="button" onClick={() => chooseUpload(true)}><Icon name="folder" size={14} />Choose folder</button></div>}
               {!cloud && <details className="settings-detail dataset-path"><summary>Use a local path</summary><label>CSV or folder path<input value={settings.dataset} onChange={(e) => update("dataset", e.target.value)} placeholder="/path/to/data.csv" /></label></details>}
-              <div className="field-grid"><label>Target column<input value={settings.target} onChange={(e) => update("target", e.target.value)} placeholder="Enter column name" /></label><label>Metric<select value={settings.metric} onChange={(e) => update("metric", e.target.value as Metric)}><option value="accuracy">Accuracy</option><option value="auroc">AUROC</option><option value="log_loss">Log loss</option><option value="rmse">RMSE</option><option value="mae">MAE</option></select></label></div>
-              <details className="settings-detail"><summary>Asset columns</summary><label>Columns containing file paths<input value={readOnly ? settings.assetColumns.join(", ") : assetText} onChange={(e) => { setAssetText(e.target.value); update("assetColumns", e.target.value.split(",").map((s) => s.trim()).filter(Boolean)); }} placeholder="image, audio, text_file" /></label></details>
+              <div className="field-grid"><label><span>Target column <small className="field-tag" aria-hidden="true">Required</small></span><input aria-required="true" value={settings.target} onChange={(e) => update("target", e.target.value)} placeholder="Enter column name" /></label><label>Metric<select value={settings.metric} onChange={(e) => update("metric", e.target.value as Metric)}><option value="accuracy">Accuracy</option><option value="auroc">AUROC</option><option value="log_loss">Log loss</option><option value="rmse">RMSE</option><option value="mae">MAE</option></select></label></div>
+              <details className="settings-detail"><summary>Asset columns <small className="field-tag">Optional</small></summary><label>Columns containing file paths<input value={readOnly ? settings.assetColumns.join(", ") : assetText} onChange={(e) => { setAssetText(e.target.value); update("assetColumns", e.target.value.split(",").map((s) => s.trim()).filter(Boolean)); }} placeholder="image, audio, text_file" /></label></details>
             </section>
             <details className="settings-section settings-group">
               <summary><h3><span>02</span> Models & strategies</h3><span className="group-value">{settings.searchModels ? "Auto" : "Custom"}</span></summary>
               <div className="model-choice" role="radiogroup" aria-label="Model selection"><label><input type="radio" name="model-search" checked={settings.searchModels} onChange={() => setTask(previous => ({ ...previous, searchModels: true, model: "" }))} /><span>Auto search</span></label><label><input type="radio" name="model-search" checked={!settings.searchModels} onChange={() => update("searchModels", false)} /><span>Choose model</span></label></div>
-              {!settings.searchModels && <label>Model or family<input value={settings.model} onChange={(e) => update("model", e.target.value)} placeholder="e.g. tree-based models only" /></label>}
-              <div className="strategy-grid">{strategies.map(([key, label]) => <label key={key} className="strategy-option"><input type="checkbox" aria-label={label} checked={settings.policy[key]} onChange={(e) => update("policy", { ...task.policy, [key]: e.target.checked })} /><span>{label}</span></label>)}</div>
+              {!settings.searchModels && <label><span>Model or family <small className="field-tag" aria-hidden="true">Required</small></span><input aria-required="true" value={settings.model} onChange={(e) => update("model", e.target.value)} placeholder="e.g. tree-based models only" /></label>}
+              <p className="field-note">Optional strategies</p><div className="strategy-grid">{strategies.map(([key, label]) => <label key={key} className="strategy-option"><input type="checkbox" aria-label={label} checked={settings.policy[key]} onChange={(e) => update("policy", { ...task.policy, [key]: e.target.checked })} /><span>{label}</span></label>)}</div>
             </details>
             <section className="settings-section">
               <h3><span>03</span> Evaluation</h3>
@@ -471,17 +473,17 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
               <div className="split-legend"><span><i className="split-train" />Train <b>{numberLabel(trainPercent)}%</b></span>{settings.validation === "holdout" && <span><i className="split-validation" />Validate <b>{numberLabel(validationPercent)}%</b></span>}<span><i className="split-test" />Test <b>{numberLabel(100 - developmentPercent)}%</b></span></div>
               <div className="field-grid">{settings.validation === "cv" ? <label>Folds<select value={settings.folds} onChange={(e) => update("folds", Number(e.target.value))}>{[3, 5, 10].map((fold) => <option key={fold} value={fold}>{fold} folds</option>)}</select></label> : <label>Validation (% of train)<NumberField min="1" max="99" step="1" placeholder="e.g. 20" value={Math.round(settings.holdoutFraction * 100)} onChange={value => update("holdoutFraction", value / 100)} /></label>}<label>Seed<input value={readOnly ? settings.seeds.join(", ") : seedText} onChange={(e) => setSeedText(e.target.value)} placeholder="42" title="Actual seed values. Separate multiple values with commas." /></label></div>
               <label>Split by<select value={settings.splitStrategy} onChange={(e) => update("splitStrategy", e.target.value as Task["splitStrategy"])}><option value="independent">Independent rows</option><option value="group">Groups</option><option value="time">Time</option></select></label>
-              {settings.splitStrategy === "group" && <label>Group column<input value={settings.groupColumn} onChange={(e) => update("groupColumn", e.target.value)} /></label>}{settings.splitStrategy === "time" && <label>Time column<input value={settings.timeColumn} onChange={(e) => update("timeColumn", e.target.value)} /></label>}
+              {settings.splitStrategy === "group" && <label><span>Group column <small className="field-tag" aria-hidden="true">Required</small></span><input aria-required="true" value={settings.groupColumn} onChange={(e) => update("groupColumn", e.target.value)} /></label>}{settings.splitStrategy === "time" && <label><span>Time column <small className="field-tag" aria-hidden="true">Required</small></span><input aria-required="true" value={settings.timeColumn} onChange={(e) => update("timeColumn", e.target.value)} /></label>}
             </section>
             <section className="settings-section">
               <h3><span>04</span> Run budget</h3>
-              <div className="field-grid"><label>Minutes<NumberField min="1" max="1440" placeholder="e.g. 30" value={settings.minutes} onChange={value => update("minutes", value)} /></label><label>Max trials<NumberField min="1" max="100" placeholder="e.g. 12" value={settings.trials} onChange={value => update("trials", value)} /></label></div>
-              <div className="workload"><span>Validation fits</span><strong>up to {numberLabel(validationFits)}</strong></div>
+              <BudgetFields minutes={settings.minutes} trials={settings.trials} onChange={update} />
+              <div className="workload"><span>Validation fits</span><strong>{settings.trials === null ? `${numberLabel(validationFits)} per trial` : `up to ${numberLabel(validationFits)}`}</strong></div>
             </section>
             <details className="settings-section settings-group">
               <summary><h3><span>05</span> Deliverables</h3><span className="group-value">.{settings.output}</span></summary>
               <label>Source<select value={settings.output} onChange={(e) => update("output", e.target.value as Task["output"])}><option value="py">Python (.py)</option><option value="ipynb">Notebook (.ipynb)</option></select></label>
-              <label className="check-label"><input type="checkbox" checked={settings.exportModel} onChange={(e) => update("exportModel", e.target.checked)} /><span>Export trained model</span></label>
+              <label className="check-label"><input type="checkbox" checked={settings.exportModel} onChange={(e) => update("exportModel", e.target.checked)} /><span>Export trained model <small className="field-tag">Optional</small></span></label>
               {settings.exportModel && <label>Model format<select value={settings.exportFormat} onChange={(e) => update("exportFormat", e.target.value as ExportFormat)}><option value="native">Native</option><option value="joblib">Joblib</option><option value="pickle">Pickle</option><option value="pytorch">PyTorch state_dict</option><option value="torchscript">TorchScript</option><option value="keras">Keras</option><option value="savedmodel">SavedModel</option><option value="onnx">ONNX</option></select></label>}
             </details>
           </fieldset>

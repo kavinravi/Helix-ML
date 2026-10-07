@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readdir, lstat, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { runProcess } from "./process.mjs";
+import { runProcess, expired, remainingTime } from "./process.mjs";
 
 export const IMAGE = "helix-ml:local";
 export const owner = (root) => createHash("sha256").update(resolve(root)).digest("hex").slice(0, 16);
@@ -43,9 +43,10 @@ export async function directoryBytes(root) {
 
 export async function container(context, command, { mounts = [], network = false, signal, onLine, writable, limit = 1_000_000_000 } = {}) {
   if (mounts.some(([path]) => path.includes(",") || path.includes("\n"))) throw new Error("Docker workspaces and datasets must use paths without commas or newlines.");
-  if (Date.now() >= context.deadline) throw new Error("The run budget has expired.");
+  if (expired(context.deadline)) throw new Error("The run budget has expired.");
   const name = `helix-${context.runId}-${randomUUID().slice(0, 8)}`;
-  const seconds = Math.max(1, Math.floor((context.deadline - Date.now()) / 1000));
+  const remaining = remainingTime(context.deadline);
+  const seconds = remaining === null ? null : Math.max(1, Math.floor(remaining / 1000));
   const controller = new AbortController();
   const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   let diskError, checking = false;
@@ -71,8 +72,8 @@ export async function container(context, command, { mounts = [], network = false
       "--user", context.user,
       "-e", "PYTHONPATH=/code:/packages", "-e", "PYTHONDONTWRITEBYTECODE=1",
       ...mounts.flatMap(([source, target, mode = "ro"]) => ["--mount", `type=bind,source=${source},target=${target}${mode === "ro" ? ",readonly" : ""}`]),
-      context.image || IMAGE, "timeout", "--kill-after=5", String(seconds), ...command,
-    ], { timeout: (seconds + 5) * 1000, signal: combined, onLine });
+      context.image || IMAGE, ...(seconds === null ? [] : ["timeout", "--kill-after=5", String(seconds)]), ...command,
+    ], { timeout: seconds === null ? null : (seconds + 5) * 1000, signal: combined, onLine });
     if (writable && await directoryBytes(writable) > limit) throw new Error("Runtime output exceeds the disk limit.");
     return result;
   } catch (error) {

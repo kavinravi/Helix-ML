@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createService } from './server.mjs';
-import { createRun, continueRun, loadRuns, saveRun, steps } from './engine.mjs';
+import { createRun, continueRun, loadRuns, saveRun, steps as iterateSteps } from './engine.mjs';
 import { availableTools, callTool } from './tools.mjs';
 import { validateTrainingHistory } from './evaluation.mjs';
 
@@ -14,6 +14,8 @@ const task = { agent: 'codex', dataset: '/example.csv', objective: 'Predict labe
   exportFormat: 'native', validation: 'holdout', folds: 3, testFraction: .2, holdoutFraction: .2, seeds: [42],
   splitStrategy: 'independent', groupColumn: '', timeColumn: '', assetColumns: [],
   policy: { augmentation: false, regularization: false, features: false, tuning: true, pretrained: false, ensemble: false } };
+
+const steps = (...args) => Array.from(iterateSteps(...args));
 
 test('follow-ups persist, isolate source, and keep the selected result and test partition frozen', async () => {
   const root = await mkdtemp(join(tmpdir(), 'helix-followups-')), runRoot = join(root, 'runs');
@@ -37,11 +39,11 @@ test('follow-ups persist, isolate source, and keep the selected result and test 
     await saveRun(runRoot, parent);
     const context = { runFile: join(runRoot, parent.id, 'run.json'), workspace: join(runRoot, parent.id, 'trials/trial-001'), mode: 'discussion', deadline: Date.now() + 10000 };
     for (const name of ['write_source', 'install_package', 'cache_model']) await assert.rejects(callTool(name, {}, context), /disabled/);
-    const child = await continueRun(runRoot, parent, 'Try a shallower tree', 2, 1);
+    const child = await continueRun(runRoot, parent, 'Try a shallower tree', null, 1);
     assert.equal(child.followup.parentId, parent.id);
     assert.equal(child.followup.protocolHash, parent.protocolHash);
     assert.equal(child.best, 'inherited'); assert.equal(child.score, .8); assert.equal(child.testScore, undefined);
-    assert.equal(child.task.trials, 1); assert.equal(child.next, 0);
+    assert.equal(child.task.minutes, null); assert.equal(child.task.trials, 1); assert.equal(child.next, 0);
     assert.deepEqual(child.task.policy, parent.task.policy);
     await assert.rejects(readFile(join(runRoot, child.id, 'trials/inherited/AGENTS.md')), /ENOENT/);
     await writeFile(join(runRoot, child.id, 'trials/inherited/train.py'), '# child only');
@@ -85,6 +87,7 @@ else {
     await service.close(); service = null;
     let loaded = await loadRuns(runRoot);
     assert.equal(loaded.get(parent.id).messages[0].reply, live.messages[0].reply);
+    assert.equal(loaded.get(child.id).task.minutes, null, 'Disabled time limits survive a restart');
     live.messages.push({ id: 'interrupted', status: 'pending', message: 'Interrupted turn' });
     await saveRun(runRoot, live);
     loaded = await loadRuns(runRoot);
