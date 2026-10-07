@@ -4,7 +4,7 @@ import { callTool, availableTools } from "./tools.mjs";
 
 const context = JSON.parse(await readFile(process.argv[2], "utf8"));
 const run = JSON.parse(await readFile(context.runFile, "utf8"));
-const tools = availableTools(run.task);
+const tools = availableTools(run.task, context.mode);
 const lines = createInterface({ input: process.stdin });
 for await (const line of lines) {
   let request;

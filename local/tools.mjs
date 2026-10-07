@@ -112,8 +112,9 @@ export const tools = [
   },
 ];
 
-export function availableTools(task) {
+export function availableTools(task, mode) {
   return tools.filter((tool) =>
+    (mode !== "discussion" || ["read_source", "dataset_info", "previous_experiments", "list_artifacts"].includes(tool.name)) &&
     (tool.name !== "search_models" || (task.searchModels && task.policy.pretrained)) &&
     (tool.name !== "cache_model" || task.policy.pretrained)).map((tool) => ({
       ...tool,
@@ -143,7 +144,7 @@ function repository(value) {
 
 export async function callTool(name, args, context) {
   const run = JSON.parse(await readFile(context.runFile, "utf8"));
-  if (!availableTools(run.task).some((tool) => tool.name === name))
+  if (!availableTools(run.task, context.mode).some((tool) => tool.name === name))
     throw new Error("This tool is disabled by the experiment's model or strategy permissions.");
   if (Date.now() >= context.deadline)
     throw new Error("The run budget has expired.");

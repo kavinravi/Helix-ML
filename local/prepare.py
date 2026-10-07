@@ -356,7 +356,7 @@ def materialize(evaluation, destination, fold_id):
     with (evaluation / "dataset.csv").open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     # Without a test split, final inputs only check export/reload and receive no score.
-    fold = {"train": protocol["development"], "validation": protocol["test"] or protocol["evaluations"][0]["validation"]} if fold_id == "final" else next(f for f in protocol["evaluations"] if f["id"] == fold_id)
+    fold = {"train": protocol["development"], "validation": (protocol["test"] if fold_id == "final" else []) or protocol["evaluations"][0]["validation"]} if fold_id in {"final", "refit"} else next(f for f in protocol["evaluations"] if f["id"] == fold_id)
     destination.mkdir(parents=True, exist_ok=False)
     write_csv(destination / "train.csv", manifest["features"] + [manifest["target"]], (rows[i] for i in fold["train"]))
     write_csv(destination / "validation.csv", manifest["features"], (rows[i] for i in fold["validation"]))

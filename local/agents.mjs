@@ -140,7 +140,11 @@ export function agentArguments(id, workspace, context, prompt) {
 }
 
 export async function invokeAgent(id, workspace, context, prompt, options = {}) {
-  const stream = agentStream(id, options.onEvent);
+  let reply = "";
+  const stream = agentStream(id, (type, text) => {
+    if (type === "agent") reply = text;
+    options.onEvent?.(type, text);
+  });
   await runProcess(
     id,
     agentArguments(id, workspace, context, prompt),
@@ -152,6 +156,7 @@ export async function invokeAgent(id, workspace, context, prompt, options = {}) 
     },
   );
   stream.finish();
+  return reply;
 }
 
 // Terminal events determine success, including zero-exit provider failures.

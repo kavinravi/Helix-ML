@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { resolve, join, dirname, basename, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { providers } from "./agents.mjs";
-import { loadRuns, snapshot, createRun, execute, saveRun, log, elapsed } from "./engine.mjs";
+import { loadRuns, snapshot, createRun, execute, saveRun, log, elapsed, discussRun, continueRun } from "./engine.mjs";
 import { inside, redact, validateTask } from "./validate.mjs";
 import { runProcess } from "./process.mjs";
 import { runtimeStatus, cleanupContainers } from "./runtime.mjs";
@@ -99,7 +99,7 @@ export async function createService({
   let stopping = false;
   const shutdown = new AbortController();
   // ponytail: one CPU experiment at a time; use a queue if concurrent runs become necessary.
-  let active = null, starting = false, verification = null;
+  let active = null, starting = false, verification = null, chatting = null;
   const mutating = new Set();
   const capabilities = new Map();
   const launch = (run) => {
@@ -133,7 +133,7 @@ export async function createService({
     if (!provider?.installed || !provider.authenticated) throw new Error(process.env.HELIX_HOSTED_WORKER === "1" ? "Connect your agent in Connections, then send the experiment again." : "Sign in to the selected CLI before starting an experiment.");
     const runtime = await runtimeStatus();
     if (!runtime.ready) throw new Error(runtime.detail);
-    if (active || (!forRun && starting)) throw new Error("An experiment is starting or running. Wait before checking an agent.");
+    if (active || (!forRun && (starting || chatting))) throw new Error("An experiment is starting or running. Wait before checking an agent.");
     if (verification) {
       if (verification.agent === agent) return verification.promise;
       throw new Error("Another agent check is running. Wait for it to finish.");
@@ -334,7 +334,7 @@ export async function createService({
         return respond(200, await getProviders(url.searchParams.get("refresh") === "1"));
       const providerCheck = path.match(/^\/providers\/(codex|claude)\/verify$/);
       if (providerCheck && request.method === "POST") {
-        if (active || starting) return respond(409, { error: "Pause or stop the current experiment before checking an agent." });
+        if (active || starting || chatting) return respond(409, { error: "Pause or stop the current experiment before checking an agent." });
         const body = await jsonBody(request);
         if (!body || (body.force !== undefined && typeof body.force !== "boolean")) throw new Error("force must be a boolean.");
         return respond(200, await verify(providerCheck[1], { force: body.force === true }));
@@ -361,7 +361,7 @@ export async function createService({
         );
       if (path === "/runs" && request.method === "POST") {
         if (verification) return respond(409, { error: "An agent check is running. Wait for it to finish." });
-        if (active || starting) return respond(409, { error: "Another experiment is running. Pause or stop it first." });
+        if (active || starting || chatting) return respond(409, { error: "Another experiment is running. Pause or stop it first." });
         starting = true;
         try {
           const task = validateTask(await jsonBody(request));
@@ -380,7 +380,7 @@ export async function createService({
         } finally { starting = false; }
       }
       const match = path.match(
-        /^\/runs\/([a-f0-9-]{36})(?:\/(action|artifacts|file))?$/,
+        /^\/runs\/([a-f0-9-]{36})(?:\/(action|artifacts|file|messages))?$/,
       );
       if (match) {
         const run = runs.get(match[1]);
@@ -388,7 +388,7 @@ export async function createService({
         if (!match[2] && request.method === "GET")
           return respond(200, snapshot(run));
         if (!match[2] && request.method === "DELETE") {
-          if (starting || active?.run.id === run.id || !["completed", "stopped", "failed", "paused"].includes(run.status))
+          if (starting || chatting?.run.id === run.id || active?.run.id === run.id || !["completed", "stopped", "failed", "paused"].includes(run.status))
             return respond(409, { error: "Wait for the experiment to finish, pause, or stop before deleting it." });
           if (mutating.has(run.id)) return respond(409, { error: "This experiment is being updated. Try again shortly." });
           mutating.add(run.id);
@@ -398,6 +398,50 @@ export async function createService({
             return respond(200, { deleted: true });
           } finally { mutating.delete(run.id); }
         }
+        if (match[2] === "messages" && request.method === "POST") {
+          if (active || starting || chatting || verification || mutating.has(run.id))
+            return respond(409, { error: "Wait for the current experiment or reply to finish." });
+          if (run.status !== "completed" || !run.best) throw new Error("Follow-ups are available after the experiment completes.");
+          mutating.add(run.id);
+          starting = true;
+          try {
+            const body = await jsonBody(request);
+            if (typeof body.message !== "string" || !body.message.trim() || body.message.length > 4000)
+              throw new Error("Write a message of 1 to 4000 characters.");
+            if (!["chat", "trials"].includes(body.mode)) throw new Error("Choose chat or more trials.");
+            if ((run.messages?.length || 0) >= 100) throw new Error("This conversation has reached 100 messages. Start a new experiment.");
+            if (body.mode === "trials") validateTask({ ...run.task, minutes: body.minutes, trials: body.trials });
+            const message = { id: randomUUID(), message: body.message.trim(), mode: body.mode, status: "pending", createdAt: new Date().toISOString() };
+            (run.messages ||= []).push(message);
+            await saveRun(runRoot, run);
+            const entry = { run, controller: new AbortController(), promise: null };
+            chatting = entry;
+            entry.promise = (async () => {
+              if (body.mode === "trials") {
+                await ready(run.task.agent);
+                if (stopping || entry.controller.signal.aborted) throw new Error("Interrupted before starting more trials.");
+                const child = await continueRun(runRoot, run, message.message, body.minutes, body.trials);
+                runs.set(child.id, child);
+                message.childRunId = child.id;
+                message.reply = `Started up to ${body.trials} additional trials from the selected model, with a ${body.minutes}-minute budget. The original result is saved.`;
+                launch(child);
+              } else {
+                const provider = (await getProviders(true)).find(value => value.id === run.task.agent);
+                if (!provider?.authenticated) throw new Error("Reconnect your agent in Connections, then resend your message.");
+                message.reply = redact(await discussRun(runRoot, run, message, entry.controller.signal)).slice(0, 24000);
+                if (!message.reply.trim()) throw new Error("The agent returned no reply. Please try again.");
+              }
+              message.status = "completed";
+            })().catch(error => {
+              message.status = "failed";
+              message.error = redact(error.message);
+            }).finally(async () => {
+              try { await saveRun(runRoot, run); }
+              finally { if (chatting === entry) chatting = null; }
+            });
+            return respond(202, snapshot(run));
+          } finally { starting = false; mutating.delete(run.id); }
+        }
         if (match[2] === "action" && request.method === "POST") {
           if (mutating.has(run.id)) return respond(409, { error: "This experiment is being updated. Try again shortly." });
           mutating.add(run.id);
@@ -405,7 +449,7 @@ export async function createService({
             const { action } = await jsonBody(request);
             if (action === "resume") {
               if (verification) return respond(409, { error: "An agent check is running. Wait for it to finish." });
-              if (active || starting) return respond(409, { error: "Another experiment is running or stopping." });
+              if (active || starting || chatting) return respond(409, { error: "Another experiment is running or stopping." });
               if (!["paused", "failed"].includes(run.status)) throw new Error("Only paused or failed runs can resume.");
               if (run.selectionFrozen && !Number.isFinite(run.testScore)) {
                 const final = JSON.parse(await readFile(join(runRoot, run.id, "final-test.json"), "utf8").catch(() => "{}"));
@@ -537,6 +581,10 @@ export async function createService({
       await verification.promise.catch(() => {});
     }
     while (starting) await delay(20);
+    if (chatting) {
+      chatting.controller.abort();
+      await chatting.promise;
+    }
     if (active) {
       active.run.status = "paused";
       active.controller.abort();

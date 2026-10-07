@@ -50,6 +50,10 @@ Before the first experiment, Helix checks that the selected agent can use its to
 
 Helix validates the dataset and requested splits before spending subscription usage on a new experiment. A second runner cannot open the same data folder while the first is alive. After an interrupted process, the next runner recovers its saved experiments. Use **Use these settings** on a saved experiment to create an editable draft with its data and configuration.
 
+Completed experiments keep a compact **Ask agent** composer. Replies use the connected Codex or Claude Code agent and are saved with the experiment. Choose **Run more trials** and set an additional time/trial budget to continue from the selected source in a linked experiment. The original download stays intact. Follow-ups reuse the recorded validation split and refit on development rows without evaluating the original test partition again.
+
+The conversation plots measured validation scores across trials. Iterative models can also record training loss and accuracy in `training_history.json`; those curves appear when recorded, with accessible values beneath each plot. Tree models do not get synthetic loss curves.
+
 `npm run doctor` identifies missing prerequisites. On macOS, make sure Docker Desktop can share the project and dataset folders. Paths must not contain commas. To use a different Python executable, set `HELIX_PYTHON`. Experiment state and uploaded data live in `.helix/`; source datasets are never modified.
 
 ## First test

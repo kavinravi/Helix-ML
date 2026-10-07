@@ -73,10 +73,10 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
   const models = join(folder, "models"), packages = packagePath || join(folder, "packages");
   await mkdir(models, { recursive: true });
   await mkdir(packages, { recursive: true });
-  const unscoredRefit = final && !protocol.test.length;
-  const folds = final ? [{ id: "final", seed: protocol.seeds[0], fold: 1, train: protocol.development, validation: protocol.test.length ? protocol.test : protocol.evaluations[0].validation }] : protocol.evaluations;
+  const unscoredRefit = final && (!!run.followup || !protocol.test.length);
+  const folds = final ? [{ id: "final", seed: protocol.seeds[0], fold: 1, train: protocol.development, validation: !unscoredRefit ? protocol.test : protocol.evaluations[0].validation }] : protocol.evaluations;
   const results = [], baselineResults = [];
-  let baselineName;
+  let baselineName, trainingHistory;
   for (const fold of folds) {
     if (signal?.aborted) throw new Error("Interrupted");
     if (Date.now() >= deadline) throw new Error("Time limit reached before the evaluation protocol finished.");
@@ -87,7 +87,7 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
     await mkdir(output);
     const started = Date.now();
     try {
-      await runProcess(python(), [preparer, "--evaluation", evaluation, "--output", data, "--fold", fold.id, "--truth", truthPath], {
+      await runProcess(python(), [preparer, "--evaluation", evaluation, "--output", data, "--fold", final && run.followup ? "refit" : fold.id, "--truth", truthPath], {
         signal, timeout: Math.max(1, deadline - Date.now()),
       });
       const config = {
@@ -106,6 +106,16 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
       });
       if ((await lstat(join(output, "predictions.json"))).size > 64_000_000) throw new Error("Predictions exceed the 64 MB limit.");
       const predictions = await json(join(output, "predictions.json"));
+      if (final) {
+        try {
+          const historyFile = join(output, "training_history.json");
+          const stat = await lstat(historyFile);
+          if (!stat.isFile() || stat.size > 128_000) throw new Error("Training history must be a regular JSON file smaller than 128 KB.");
+          trainingHistory = validateTrainingHistory(await json(historyFile));
+        } catch (error) {
+          if (error.code !== "ENOENT") onEvent("system", `Training curve omitted: ${error.message}`);
+        }
+      }
       if (run.task.exportModel) {
         // The reload process receives no training rows, labels, or in-memory model.
         await rm(join(data, "train.csv"));
@@ -133,7 +143,7 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
   if ((await sourceFingerprint(workspace)).sha256 !== source.sha256)
     throw new Error("Candidate source changed during evaluation; its scores cannot be accepted.");
   const baseline = unscoredRefit ? null : { name: baselineName, ...aggregateScores(baselineResults, folds.length) };
-  return { ...(unscoredRefit ? { score: null, deviation: null, foldScores: [], evaluations: results } : aggregateScores(results, folds.length)), baseline, protocolHash: protocol.sha256, sourceHash: source.sha256 };
+  return { ...(unscoredRefit ? { score: null, deviation: null, foldScores: [], evaluations: results } : aggregateScores(results, folds.length)), baseline, ...(trainingHistory ? { trainingHistory } : {}), protocolHash: protocol.sha256, sourceHash: source.sha256 };
 }
 
 export async function evaluateFinal(root, run, workspace, options) {
@@ -164,4 +174,20 @@ export async function evaluateFinal(root, run, workspace, options) {
     await rename(file + ".tmp", file);
     throw error;
   }
+}
+
+export function validateTrainingHistory(value) {
+  if (!Array.isArray(value) || value.length < 2 || value.length > 500) throw new Error("Record between 2 and 500 training steps.");
+  return value.map((point, index) => {
+    if (!point || !Number.isSafeInteger(point.step) || point.step < 0 || (index && point.step <= value[index - 1].step))
+      throw new Error("Training steps must be increasing nonnegative integers.");
+    const result = { step: point.step };
+    for (const key of ["loss", "accuracy"]) if (point[key] !== undefined) {
+      if (!Number.isFinite(point[key]) || (key === "accuracy" && (point[key] < 0 || point[key] > 1)))
+        throw new Error(`Invalid training ${key}.`);
+      result[key] = point[key];
+    }
+    if (result.loss === undefined && result.accuracy === undefined) throw new Error("Each step must record loss or accuracy.");
+    return result;
+  });
 }

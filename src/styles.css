@@ -407,3 +407,44 @@ h1 { font-family: "Source Serif 4", Georgia, serif; font-weight: 400; letter-spa
 .social-button.github img { filter: brightness(0) invert(1); }
 .signin-divider { display: flex; align-items: center; gap: 16px; margin: 23px 0; color: var(--muted); font-size: 12px; }
 .signin-divider::before, .signin-divider::after { content: ""; height: 1px; background: var(--border); flex: 1; }
+
+.followup-composer { border: 1px solid #454e3b; border-radius: 10px; padding: 10px 14px; background: var(--surface); }
+.followup-composer textarea { width: 100%; min-height: 42px; max-height: 96px; padding: 4px 0; border: 0; background: transparent; resize: vertical; font-size: 14px; line-height: 1.5; }
+.followup-toolbar { display: flex; align-items: center; gap: 12px; }
+.followup-toolbar > select { width: auto; padding: 6px 8px; font-size: 12px; }
+.followup-toolbar .send-button { width: 32px; height: 32px; margin-left: auto; font-size: 22px; }
+.followup-budget { display: flex; gap: 10px; }
+.followup-budget label { flex-direction: row; align-items: center; gap: 6px; font-size: 11px; }
+.followup-budget input { width: 65px; padding: 6px; font-size: 12px; }
+.followup-composer + .run-dock { border-top: 0; min-height: 36px; }
+.followup-turn { margin-top: 30px; }
+.followup-turn .user-message { margin-bottom: 18px; }
+.agent-reply { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.7; margin: 0 0 12px; }
+.reply-pending { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 13px; }
+.followup-origin { margin-bottom: 20px; font-size: 13px; line-height: 1.5; }
+.followup-origin p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.followup-origin > span { font-size: 11px; color: var(--muted); }
+.run-plots { display: grid; gap: 16px; margin: 22px 0; }
+.run-plots:empty { display: none; }
+.metric-plot { min-width: 0; margin: 0; border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+.metric-plot figcaption { font-size: 12px; color: #c6d3bb; margin-bottom: 6px; }
+.metric-plot svg { width: 100%; max-height: 240px; display: block; overflow: visible; }
+.metric-plot text { fill: var(--muted); font-size: 10px; font-family: var(--mono); }
+.plot-grid { stroke: var(--border); stroke-width: 1; }
+.plot-baseline { stroke: #a79073; stroke-dasharray: 5 4; stroke-width: 1.5; }
+.plot-line { fill: none; stroke: var(--green); stroke-width: 2; }
+.plot-point { fill: var(--green); }
+.plot-values { font-size: 11px; color: var(--muted); margin-top: 8px; }
+.plot-values summary { display: flex; gap: 12px; align-items: center; }
+.plot-values summary span { margin-left: auto; font-size: 10px; }
+.plot-values summary::after { margin-left: 0; }
+.plot-values table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.plot-values th, .plot-values td { text-align: left; padding: 5px 0; font-weight: normal; }
+.plot-values th:last-child, .plot-values td:last-child { text-align: right; font-family: var(--mono); }
+@media (max-width: 650px) {
+  .followup-toolbar { flex-wrap: wrap; gap: 8px; }
+  .followup-budget { order: 3; width: 100%; }
+  .metric-plot { padding: 10px 6px; }
+}
+
+@media (max-width: 650px) { .metric-plot text { font-size: 16px; } }

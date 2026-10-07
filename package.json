@@ -17,7 +17,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "bridge": "node local/server.mjs",
     "setup": "node local/setup.mjs",
-    "test": "node --test local/check.test.mjs",
+    "test": "node --test local/check.test.mjs local/followup.test.mjs",
     "test:runtime": "node local/runtime_check.mjs",
     "test:agents": "node local/agent_check.mjs",
     "test:mvp": "node local/mvp_check.mjs",

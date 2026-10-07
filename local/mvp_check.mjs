@@ -27,6 +27,10 @@ try {
     task.searchModels = true; task.model = "";
     task.objective = "Predict short or long from the numeric measurements. Start with an economical model using preinstalled packages, then compare distinct approaches.";
   }
+  if (process.env.HELIX_TEST_FOLLOWUP === "1") {
+    task.trials = 1; task.policy.tuning = true; task.minutes = 5;
+    task.objective = "Predict short or long from the numeric measurements using a DecisionTreeClassifier. Start with the defaults; tuning is allowed in later trials.";
+  }
   const requestedAt = Date.now();
   const started = await request("/runs", task);
   const readinessSeconds = (Date.now() - requestedAt) / 1000;
@@ -72,6 +76,42 @@ try {
   assert.equal(download.status, 200);
   assert.ok((await download.arrayBuffer()).byteLength > 1000);
   console.log(`PASS: ${task.agent} → ${task.output} training → ${task.exportFormat} reload → reserved test → downloadable bundle. Validation ${run.score}; test ${run.testScore}.`);
+  if (process.env.HELIX_TEST_FOLLOWUP === "1") {
+    const original = await readFile(join(root, "runs", id, "final", "helix-solution.zip"));
+    const waitMessage = async () => {
+      const until = Date.now() + 240_000;
+      while (Date.now() < until) {
+        const result = (await request(`/runs/${id}`)).body.messages.at(-1);
+        if (result.status !== "pending") { assert.equal(result.status, "completed", result.error); return result; }
+        await setTimeout(1000);
+      }
+      throw new Error("Follow-up timed out");
+    };
+    assert.equal((await request(`/runs/${id}/messages`, { mode: "chat", message: "What validation accuracy was measured, and how many trials ran? Answer in one sentence." })).status, 202);
+    const reply = await waitMessage();
+    assert.ok(reply.reply.length > 10);
+    console.log("Native follow-up reply: " + reply.reply);
+    assert.equal((await request(`/runs/${id}/messages`, { mode: "trials", message: "Try max_depth=2 for the existing DecisionTreeClassifier. Keep everything else the same.", minutes: 5, trials: 1 })).status, 202);
+    const continued = await waitMessage();
+    assert.ok(continued.childRunId);
+    const until = Date.now() + 360_000;
+    let child, last = "";
+    while (Date.now() < until) {
+      child = (await request(`/runs/${continued.childRunId}`)).body;
+      const progress = `${child.status}: ${child.phase}; ${child.logs.at(-1)?.message || ""}`;
+      if (progress !== last) { console.log("Follow-up " + progress.slice(0, 400)); last = progress; }
+      if (!["running", "queued"].includes(child.status)) break;
+      await setTimeout(1000);
+    }
+    assert.equal(child.status, "completed", child.error);
+    assert.equal(child.trials.length, 2, "One inherited model plus exactly one additional trial");
+    assert.ok(Number.isFinite(child.trials[1].score), child.trials[1].detail);
+    assert.equal(child.testScore, null);
+    assert.equal(child.protocolHash, run.protocolHash);
+    assert.deepEqual(await readFile(join(root, "runs", id, "final", "helix-solution.zip")), original);
+    assert.equal((await request(`/runs/${id}`)).body.testScore, run.testScore);
+    console.log(`PASS: native discussion → one additional measured trial → development-only refit → original bundle preserved. Additional validation ${child.trials[1].score}.`);
+  }
   if (process.env.HELIX_KEEP_TEST_RUN) console.log(`Artifacts retained at ${root}`);
 } finally {
   await service?.close();

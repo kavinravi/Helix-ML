@@ -99,7 +99,20 @@ export interface Log {
   type: string;
   message: string;
 }
+export interface FollowupMessage {
+  id: string;
+  message: string;
+  mode: "chat" | "trials";
+  status: "pending" | "completed" | "failed";
+  createdAt: string;
+  reply?: string;
+  error?: string;
+  childRunId?: string;
+}
 export interface Run {
+  messages?: FollowupMessage[];
+  followup?: { parentId: string; message: string; protocolHash: string };
+  trainingHistory?: { step: number; loss?: number; accuracy?: number }[];
   id: string;
   task: Task;
   status: RunStatus;

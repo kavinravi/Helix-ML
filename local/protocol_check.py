@@ -38,6 +38,14 @@ with TemporaryDirectory(prefix="helix-protocol-") as folder:
             manifest = prepare(config, destination)
             protocol = json.loads((destination / "protocol.json").read_text())
             assert prepare(config, destination) == manifest
+            refit_data = root / (destination.name + "-refit")
+            materialize(destination, refit_data, "refit")
+            refit_train = list(csv.DictReader((refit_data / "train.csv").open()))
+            refit_validation = list(csv.DictReader((refit_data / "validation.csv").open()))
+            assert {int(row["x"]) for row in refit_train} == set(protocol["development"])
+            assert {int(row["x"]) for row in refit_validation} == set(protocol["evaluations"][0]["validation"])
+            assert not {int(row["x"]) for row in refit_train + refit_validation} & set(protocol["test"])
+
             assert not set(protocol["test"]) & set(protocol["development"])
             assert set(protocol["test"]) | set(protocol["development"]) == set(range(len(rows)))
             assert len(protocol["evaluations"]) == len(task["seeds"]) * (5 if method == "cv" else 1)

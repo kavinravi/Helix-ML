@@ -80,7 +80,7 @@ export function workspaces(store) {
       if (sandbox.status !== 'RUNNING') { store.saveWorkspace(id, {checkpoint: value.checkpoint}); handles.delete(id); seen.delete(id); return; }
       const runs = await request(value, '/api/runs');
       if (!runs.ok) throw new Error('Could not inspect workspace before saving.');
-      if ((await runs.json()).some(run => ['running', 'queued'].includes(run.status))) return;
+      if ((await runs.json()).some(run => ['running', 'queued'].includes(run.status) || run.messages?.some(message => message.status === 'pending'))) return;
       const auth = await request(value, '/native-login');
       if (!auth.ok || (await auth.json())?.status === 'waiting') return;
       const providers = await request(value, '/api/providers');

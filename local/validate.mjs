@@ -31,8 +31,8 @@ export function validateTask(body) {
     body.minutes > 1440
   )
     throw new Error("The time budget must be between 1 and 1440 minutes.");
-  if (!Number.isInteger(body.trials) || body.trials < 3 || body.trials > 100)
-    throw new Error("The trial budget must be between 3 and 100.");
+  if (!Number.isInteger(body.trials) || body.trials < 1 || body.trials > 100)
+    throw new Error("The trial budget must be between 1 and 100.");
   if (
     typeof body.searchModels !== "boolean" ||
     typeof body.model !== "string" ||

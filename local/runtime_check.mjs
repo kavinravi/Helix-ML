@@ -136,6 +136,31 @@ Path(a.output).write_text(json.dumps(model.predict([[float(r['x'])] for r in row
       assert.equal(final.evaluations[0].trainingRows, 48);
       assert.equal(final.evaluations[0].validationRows, 12);
       assert.deepEqual(await evaluateFinal(root, run, workspace, { deadline, signal: controller.signal, image: image.trim() }), final);
+      const followup = { id: randomUUID(), task: run.task, followup: { parentId: run.id } };
+      await mkdir(join(root, followup.id));
+      const continuedSource = join(root, followup.id, "candidate");
+      await cp(workspace, continuedSource, { recursive: true });
+      // Real iterative training: telemetry is measured, never fabricated for the chart.
+      const iterative = source.replace("from sklearn.tree import DecisionTreeClassifier", "from sklearn.linear_model import SGDClassifier\nfrom sklearn.metrics import log_loss, accuracy_score")
+        .replace("model = make_pipeline(SimpleImputer(), DecisionTreeClassifier(random_state=int(a.seed), max_depth=3))", "model = SGDClassifier(loss='log_loss', random_state=int(a.seed))")
+        .replace("model.fit(features(train), [row['label'] for row in train])", `history = []
+labels = [row['label'] for row in train]
+for epoch in range(5):
+    model.partial_fit(features(train), labels, classes=np.unique(labels))
+    history.append({'step': epoch + 1, 'loss': log_loss(labels, model.predict_proba(features(train)), labels=model.classes_), 'accuracy': accuracy_score(labels, model.predict(features(train)))})
+(Path(a.output).parent / 'training_history.json').write_text(json.dumps(history))`);
+      await writeFile(join(continuedSource, "train.py"), iterative);
+      const continuedManifest = await prepareEvaluation(root, followup, { deadline, signal: controller.signal });
+      assert.equal(continuedManifest.protocolHash, manifest.protocolHash);
+      const continued = await evaluateFinal(root, followup, continuedSource, { deadline, signal: controller.signal, image: image.trim() });
+      assert.equal(continued.score, null, "Follow-ups must not reuse the held-out test score");
+      assert.equal(continued.baseline, null);
+      assert.equal(continued.evaluations[0].trainingRows, 48);
+      assert.equal(continued.evaluations[0].validationRows, 16, "Refit checks reload on development rows, not the 12 test rows");
+      assert.equal(continued.trainingHistory.length, 5);
+      assert.ok(continued.trainingHistory.every(point => Number.isFinite(point.loss) && point.accuracy >= 0 && point.accuracy <= 1));
+      assert.deepEqual(await evaluateFinal(root, run, workspace, { deadline, signal: controller.signal, image: image.trim() }), final, "The parent's frozen result is unchanged");
+      console.log("follow-up: development-only refit, verified model reload, five measured loss/accuracy points; original test result unchanged");
       const refit = { id: randomUUID(), task: { ...run.task, testFraction: 0, holdoutFraction: .3, validation: "holdout", seeds: [42], output: "py" } };
       await mkdir(join(root, refit.id));
       const refitSource = join(root, refit.id, "candidate");
