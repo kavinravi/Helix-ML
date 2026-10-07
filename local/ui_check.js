@@ -47,9 +47,14 @@ async page => {
   await page.getByLabel('Choose coding agent',{exact:true}).click();await page.getByRole('radio',{name:'OpenAI Codex',exact:true}).check();
   await page.getByRole('dialog',{name:'Connect Codex',exact:true}).waitFor({state:'hidden'});
   check(await page.getByRole('textbox',{name:'Experiment message',exact:true}).inputValue()==='Predict short or long from length and width','Login must preserve the draft');
-  await page.getByRole('button',{name:'Experiment settings',exact:true}).click();await minutes.fill('5');await page.getByRole('button',{name:'Done',exact:true}).click();
+  check(await page.locator('.composer input[aria-label="Target column"]').count()===0,'The composer must not duplicate the target setting');
+  await page.getByRole('button',{name:'Experiment settings',exact:true}).click();await minutes.fill('5');
+  const target=page.getByRole('textbox',{name:'Target column',exact:true});
+  check(await target.count()===1,'Settings must contain the only target-column input');
+  await target.fill('outcome');await page.getByRole('button',{name:'Done',exact:true}).click();
   await page.getByRole('button',{name:'Run experiment',exact:true}).click();
   await page.getByText('Intentional test stop after send',{exact:true}).waitFor();
+  check(submitted?.target==='outcome','Send must use the target column entered in Settings');
   check(submitted?.minutes===5 && submitted.agent==='codex','Send must refresh stale sign-in state and submit the exact edited budget');
   await page.getByRole('button',{name:'Cloud',exact:true}).click();
   check(await page.getByRole('button',{name:/Verify agent|Recheck/}).count()===0,'Signing in must not require a separate verification button');

@@ -54,7 +54,7 @@ Helix validates the dataset and requested splits before spending subscription us
 
 ## First test
 
-The bundled [measurements.csv](examples/measurements.csv) is synthetic test data, not a benchmark. Attach that file with **+ → Upload CSV**, enter `label` in the Target field, and set the following in **Settings**:
+The bundled [measurements.csv](examples/measurements.csv) is synthetic test data, not a benchmark. Attach that file with **+ → Upload CSV**, enter `label` in **Settings → Target column**, and set the following:
 
 | Setting | Value |
 | --- | --- |

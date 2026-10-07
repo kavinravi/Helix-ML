@@ -181,7 +181,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
   const configuredTask = (): Task => {
     if (!selected) throw new Error("Choose Codex or Claude Code.");
     if (!task.dataset) throw new Error("Attach a dataset first.");
-    if (!task.target.trim()) throw new Error("Enter the target column next to your dataset.");
+    if (!task.target.trim()) throw new Error("Enter the target column in Settings.");
     if (!task.objective.trim()) throw new Error("Describe your experiment.");
     if (!Number.isInteger(task.minutes) || task.minutes < 1 || task.minutes > 1440) throw new Error("Enter a time budget between 1 and 1440 minutes in Settings.");
     if (!Number.isInteger(task.trials) || task.trials < 3 || task.trials > 100) throw new Error("Enter a trial budget between 3 and 100 in Settings.");
@@ -353,7 +353,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
             onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
             onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
             onDrop={(e) => { e.preventDefault(); setDragging(false); void upload(e.dataTransfer.files); }}>
-            {task.dataset && <div className="attachment-row"><span className="dataset-chip" title={task.dataset}><Icon name="file" size={16} /><span>{datasetName(task.dataset)}</span><button type="button" aria-label="Remove dataset" disabled={!!active || !!busy} onClick={() => update("dataset", "")}><Icon name="close" size={13} /></button></span><label className="target-input"><span>Target</span><input aria-label="Target column" value={task.target} placeholder="Column name" disabled={!!active} onChange={(e) => update("target", e.target.value)} /></label></div>}
+            {task.dataset && <div className="attachment-row"><span className="dataset-chip" title={task.dataset}><Icon name="file" size={16} /><span>{datasetName(task.dataset)}</span><button type="button" aria-label="Remove dataset" disabled={!!active || !!busy} onClick={() => update("dataset", "")}><Icon name="close" size={13} /></button></span></div>}
             <textarea ref={prompt} aria-label="Experiment message" rows={1} value={task.objective} disabled={!!active || !!busy || !!submission} placeholder={busy === "upload" ? "Uploading data…" : "Describe your experiment…"} maxLength={4000} onChange={(e) => update("objective", e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); composer.current?.requestSubmit(); } }} />
             <div className="composer-toolbar">
               <details className="attach-menu" ref={attachMenu}><summary title="Attach data" aria-label="Attach data"><Icon name="plus" size={21} /></summary><div className="attach-options"><button type="button" disabled={!!active || !!busy} onClick={() => chooseUpload()}><Icon name="file" />Upload CSV</button><button type="button" disabled={!!active || !!busy} onClick={() => chooseUpload(true)}><Icon name="folder" />Upload folder</button>{!cloud && <button type="button" onClick={() => { attachMenu.current?.removeAttribute("open"); setModal("settings"); }}><Icon name="link" />Local path</button>}</div></details>
