@@ -11,7 +11,7 @@ async page => {
     const url = new URL(route.request().url()), path = url.pathname;
     const json = (value, status=200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(value)});
     if(path==='/health') return json({mode:'hosted'});
-    if(path==='/account/session') return json({username:'ui-check',csrf:'browser-test-session'});
+    if(path==='/account/session') return json({username:'kavinravi',csrf:'browser-test-session'});
     if(path==='/account/methods') return json([]);
     if(path==='/account/logout') return json({signedOut:true});
     if(path==='/account/workspace') return json({ready:true});
@@ -65,14 +65,14 @@ async page => {
   check(await page.getByText('Codex-only test failure',{exact:true}).count()===1,'Technical errors must not be duplicated');
   check(!(await page.getByText('Codex-only test failure',{exact:true}).isVisible()),'Technical errors should be collapsed initially');
   await page.getByRole('button',{name:'Close dialog',exact:true}).click();
-  const avatar=page.getByRole('button',{name:'Signed in as ui-check',exact:true});
-  check(await avatar.innerText()==='UI','The signed-in account needs a visible initials badge');
+  const avatar=page.getByRole('button',{name:'Signed in as kavinravi',exact:true});
+  check(await avatar.innerText()==='K','The account badge must show only the first initial');
   await page.setViewportSize({width:390,height:844});
   const bounds=await avatar.boundingBox();
   check(bounds && bounds.x>=0 && bounds.x+bounds.width<=390,'The account badge must stay visible on mobile');
   await avatar.focus();await avatar.press('Enter');
   await page.getByRole('heading',{name:'Connections',exact:true}).waitFor();
-  check(await page.getByText('Cloud · ui-check',{exact:true}).isVisible(),'The badge must open the signed-in account');
+  check(await page.getByText('Cloud · kavinravi',{exact:true}).isVisible(),'The badge must open the signed-in account');
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
   await page.getByRole('heading',{name:'Welcome back',exact:true}).waitFor();
   check(await avatar.count()===0,'The badge must disappear after signing out');

@@ -309,7 +309,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
         <span className="workspace-label">WORKSPACE <span>/</span></span><span className="conversation-title">{run?.task.objective || submission?.task.objective || "New experiment"}</span>
         <button className="connection-status" onClick={() => { setError(""); setModal("connections"); }}><span className={`connection-dot ${connection && !connectionError ? "online" : ""}`} />{connecting ? "Connecting…" : connection && !connectionError ? cloud ? "Cloud" : "Local" : "Connect"}</button>
         <button className={`icon-button setup-toggle ${settingsVisible ? "selected" : ""}`} aria-label="Toggle experiment setup" aria-expanded={settingsVisible} onClick={() => setModal(settingsVisible ? null : "settings")}><Icon name="settings" /></button>
-        {cloud && <button className="account-avatar" aria-label={`Signed in as ${cloud.username}`} title={`Signed in as ${cloud.username}`} aria-haspopup="dialog" onClick={() => { setError(""); setModal("connections"); }}>{cloud.username.slice(0, 2).toUpperCase()}</button>}
+        {cloud && <button className="account-avatar" aria-label={`Signed in as ${cloud.username}`} title={`Signed in as ${cloud.username}`} aria-haspopup="dialog" onClick={() => { setError(""); setModal("connections"); }}>{cloud.username.charAt(0).toUpperCase()}</button>}
       </header>
       <section className={`conversation ${run || submission ? "has-run" : "is-empty"}`} aria-label="Experiment conversation">
         {submission ? <div className="thread">
