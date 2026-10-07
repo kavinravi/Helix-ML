@@ -19,10 +19,10 @@ with tempfile.TemporaryDirectory(prefix="helix-package-") as temp:
     app = staging / "Helix ML.app/Contents"
     source = app / "Resources/helix"
     source.mkdir(parents=True)
-    for name in [".gitignore", "LICENSE", "README.md", "HELIX_ML_SPEC.md", "package.json", "package-lock.json", "tsconfig.json", "vite.config.mjs", "index.html"]:
+    for name in [".gitignore", ".dockerignore", "Dockerfile", "LICENSE", "README.md", "HELIX_ML_SPEC.md", "package.json", "package-lock.json", "tsconfig.json", "vite.config.mjs", "index.html"]:
         shutil.copy2(project / name, source / name)
-    for name in ["src", "public", "local", "examples", "dist"]:
-        shutil.copytree(project / name, source / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    for name in ["src", "public", "local", "hosted", "examples", "dist"]:
+        shutil.copytree(project / name, source / name, ignore=shutil.ignore_patterns("node_modules", "__pycache__", "*.pyc"))
     subprocess.run(["python3", str(project / "local/bundle.py"), str(source)], check=True)
     shutil.move(source / "helix-solution.zip", output / "helix-ml.zip")
     (app / "MacOS").mkdir()
