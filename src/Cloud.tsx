@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import App from "./App";
+import Admin from "./Admin";
 import { api } from "./api";
 import type { AgentId, Connection } from "./types";
 
 type SignInMethod = { id: "github" | "google"; name: string; linked: boolean };
-type Session = { username: string; csrf: string };
+type Session = { username: string; csrf: string; isAdmin?: boolean };
 type Login = { agent: AgentId; status: "waiting" | "connected" | "failed"; url: string | null; code: string | null };
 export default function Cloud() {
+  const adminPage = /^\/admin\/?$/.test(location.pathname);
   const [methods, setMethods] = useState<SignInMethod[]>([]);
   const [notice, setNotice] = useState(() => new URLSearchParams(location.search).get("signin") === "failed" ? "Sign-in did not finish. Please try again. If you already have a Helix account, sign in first and link it in Connections." : new URLSearchParams(location.search).get("signin") === "linked" ? "Sign-in method linked to your workspace." : "");
   const [hosted, setHosted] = useState<boolean | null>(null);
@@ -32,7 +34,14 @@ export default function Cloud() {
           fetch("/account/session").then(r => r.ok ? r.json() : null).catch(() => null),
           fetch("/account/methods").then(r => r.ok ? r.json() : []).catch(() => []),
         ]);
-        if (!stopped) { setSession(value); setMethods(available); setHosted(true); }
+        if (!stopped) {
+          if (value) {
+            let returning = false;
+            try { returning = sessionStorage.getItem("helix-return-to-admin") === "1"; sessionStorage.removeItem("helix-return-to-admin"); } catch { /* Navigation also works without optional browser storage. */ }
+            if (returning && !adminPage) { location.replace("/admin"); return; }
+          }
+          setSession(value); setMethods(available); setHosted(true);
+        }
         if (new URLSearchParams(location.search).has("signin")) history.replaceState(null, "", location.pathname);
       } else if (!stopped) setHosted(false);
     })();
@@ -40,14 +49,14 @@ export default function Cloud() {
   }, []);
   useEffect(() => {
     setReady(false);
-    if (!connection) return;
+    if (!connection || adminPage) return;
     const controller = new AbortController();
     setError("");
     void api(connection, "/account/workspace", {method: "POST", signal: AbortSignal.any([controller.signal, AbortSignal.timeout(360_000)])})
       .then(() => { if (!controller.signal.aborted) setReady(true); })
       .catch(e => { if (!controller.signal.aborted) { if (e.status === 401) setSession(null); else setError(e.message); } });
     return () => controller.abort();
-  }, [connection, retry]);
+  }, [connection, retry, adminPage]);
   useEffect(() => {
     if (linking) dialog.current?.showModal(); else dialog.current?.close();
   }, [linking]);
@@ -85,6 +94,7 @@ export default function Cloud() {
       const response = await fetch(`/account/oauth/${method.id}`, {method: "POST", headers: connection ? {Authorization: `Bearer ${connection.token}`} : {}});
       const value = await response.json();
       if (!response.ok) throw new Error(value.error);
+      if (adminPage) { try { sessionStorage.setItem("helix-return-to-admin", "1"); } catch { /* The owner can open Admin after signing in. */ } }
       location.assign(value.url);
     } catch (e) { setError((e as Error).message); setBusy(false); }
   };
@@ -127,9 +137,12 @@ export default function Cloud() {
     <button className="text-button account-switch" onClick={() => { setRegister(!register); setError(""); }}>{register ? "Already have an account? Sign in" : "New here? Create an account"}</button>
     <div className="account-agents"><img src="/brands/openai.svg" alt="OpenAI Codex" /><span>Codex</span><img src="/brands/claude.svg" alt="Claude Code" /><span>Claude Code</span></div>
   </section></main>;
+  if (adminPage && connection) return session.isAdmin
+    ? <Admin connection={connection} username={session.username} accountError={error} signOut={() => void signOut()} expired={() => setSession(null)} />
+    : <main className="account-page"><section className="account-card"><a className="account-wordmark" href="/">helix.</a><h1>Owner access only</h1><p>This account does not have access to user statistics.</p><a className="primary" href="/">Back to experiments</a><button className="text-button account-switch" onClick={() => void signOut()}>Switch account</button></section></main>;
   if (!ready || !connection) return <main className="account-page"><section className="account-card"><span className="account-wordmark">helix.</span><h1>Opening your workspace</h1><p role="status">Starting the training runtime. Your saved experiments will appear here.</p>{error && <><p role="alert" className="inline-error">{error}</p><button className="primary" onClick={() => setRetry(v => v + 1)}>Try again</button></>}<button className="text-button account-switch" onClick={() => void signOut()}>Sign out</button></section></main>;
   return <>
-    <App cloud={{connection, username: session.username, agentRevision, linkAgent: agent => void linkAgent(agent), signOut: () => void signOut(), expired: () => setSession(null), signInMethods: methods.map(method => ({...method, connect: () => void socialSignIn(method)}))}} />
+    <App cloud={{connection, username: session.username, isAdmin: session.isAdmin, agentRevision, linkAgent: agent => void linkAgent(agent), signOut: () => void signOut(), expired: () => setSession(null), signInMethods: methods.map(method => ({...method, connect: () => void socialSignIn(method)}))}} />
     {(error || notice) && !linking && <div className="cloud-error" role="status">{error || notice}<button onClick={() => { setError(""); setNotice(""); }}>Dismiss</button></div>}
     <dialog ref={dialog} className="modal provider-modal" onCancel={closeLogin} aria-labelledby="provider-title">
       <div className="modal-content"><header className="modal-header"><h2 id="provider-title">Connect {linking === "codex" ? "Codex" : "Claude Code"}</h2><button className="icon-button" aria-label="Close sign-in" onClick={closeLogin}>×</button></header>

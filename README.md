@@ -26,6 +26,14 @@ Google/GitHub sign-in buttons appear when their OAuth clients are configured. Se
 
 Existing users can link these methods from **Connections** after signing in to their Helix account. Identities are matched by the provider's stable account ID, never by a matching name or email. Linking an identity already owned by another Helix account is rejected. Login uses one-time, browser-bound state and PKCE; provider access tokens are used to fetch identity, then discarded. Native Codex/Claude credentials remain separate. Password recovery and account deletion are not yet self-service. A single gateway owns workspace admission and idle saves; add shared admission control before scaling to multiple gateway instances.
 
+## Owner dashboard
+
+Open [/admin](https://helix-web-production-03c9.up.railway.app/admin), or choose **Users & activity** in Connections from your account icon. Sign in to the Helix account linked to the owner's GitHub identity. The dashboard lists users, linked Helix sign-in methods, saved workspaces, signup dates, and last-seen activity, with search and pagination. Opening it does not start an ML worker or require a Codex/Claude login.
+
+Set `HELIX_ADMIN_GITHUB_ID` on the hosted gateway to the owner's immutable numeric GitHub user ID. Authorization checks the verified GitHub identity linked to the account, never its display name or a browser-supplied role. Leaving the variable unset disables admin access. The API requires the same authenticated session and CSRF header as other account endpoints and returns no password hashes, session secrets, or workspace credentials.
+
+Signup/activity tracking begins with this update. Existing users keep their accounts and sessions; their original signup dates remain unknown. Last seen records authenticated requests at most once per five minutes, including requests from an open browser tab. The seven-day counters reflect recorded activity, not historical analytics or live human presence. Saved workspaces are not a count of running experiments.
+
 ## Run it locally
 
 The ready-to-run ZIP includes the built interface. If your prerequisites and training runtime are already set up, extract it and run `npm start`; no dependency installation or interface build is needed.

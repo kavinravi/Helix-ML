@@ -3,6 +3,7 @@ import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
+import {DatabaseSync} from 'node:sqlite';
 import {accounts} from './accounts.mjs';
 import {hostedServer} from './server.mjs';
 import {accountOAuth} from './oauth.mjs';
@@ -12,6 +13,9 @@ const worker=createServer((req,res)=>{res.setHeader('Content-Type','application/
 await new Promise(resolve=>worker.listen(0,'127.0.0.1',resolve));
 let app;
 try {
+  const legacy=new DatabaseSync(join(root,'accounts.sqlite'));
+  legacy.exec("CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, salt TEXT NOT NULL, password TEXT NOT NULL, workspace TEXT); INSERT INTO users VALUES('legacy','legacy','','',NULL)");
+  legacy.close();
   let db=accounts(root);
   const a=await db.signIn('alice','a long password for alice',true);
   const b=await db.signIn('bob','a long password for bob',true);
@@ -20,6 +24,11 @@ try {
   await assert.rejects(db.signIn('eve','short',true),/12 characters/);
   const linked=db.identify('github','123','alice',a.id);
   assert.equal(linked.id,a.id);assert.equal(db.identify('github','123','renamed').id,a.id);
+  assert.equal(db.isAdmin(a.id,'123'),true);
+  assert.equal(db.isAdmin(a.id,''),false);
+  assert.equal(db.isAdmin(b.id,'123'),false);
+  const lookalike=db.identify('github','unrelated-id','alice');
+  assert.equal(db.isAdmin(lookalike.id,'123'),false,'Display names must never grant admin access');
   assert.throws(()=>db.identify('github','123','alice',b.id),/another Helix account/);
   const google=db.identify('google','123','alice');assert.notEqual(google.id,a.id);
   await assert.rejects(db.signIn(google.username,'a long random password',false),/Incorrect/);
@@ -95,10 +104,21 @@ try {
   }
   const token=db.session(a.id);db.saveWorkspace(a.id,{checkpoint:'alice'});db.close();
   db=accounts(root);assert.equal(db.authenticate(token.token).id,a.id);assert.equal(db.workspace(a.id).checkpoint,'alice');assert.equal(db.workspace(b.id),null);assert.deepEqual(db.identities(a.id),['github']);assert.equal(db.identify('google','123','alice').id,google.id);
+  assert.equal(db.adminOverview('legacy').users[0].createdAt,null,'Do not invent signup dates for migrated accounts');
+  const seen=db.adminOverview('alice').users.find(user=>user.id===a.id).lastSeenAt;
+  db.authenticate(token.token);
+  assert.equal(db.adminOverview('alice').users.find(user=>user.id===a.id).lastSeenAt,seen,'Activity writes must be throttled');
+  for(let i=0;i<53;i++)db.identify('google',`page-${i}`,`pageuser${i}`);
+  assert.equal(db.adminOverview('PAGEUSER').matching,53);
+  assert.equal(db.adminOverview('pageuser').users.length,50);
+  assert.equal(db.adminOverview('pageuser',1).users.length,3);
+  assert.equal(db.adminOverview('%').matching,0,'Search is literal, not a SQL wildcard');
+  assert.equal(db.adminOverview().summary.newUsers,db.users().length-1,'Only new accounts have signup timestamps');
   db.logout(token.token);assert.equal(db.authenticate(token.token),null);db.close();
   assert.ok(!(await readFile(join(root,'accounts.sqlite'))).includes(Buffer.from('a long password')));
   const origin='http://127.0.0.1:4328';
-  app=hostedServer({root,origin,makeWorkspaces:()=>({ensure:async id=>({url:`http://127.0.0.1:${worker.address().port}`,token:id}),retain:()=>()=>{},invalidate:()=>{},close:()=>{}})});
+  let workspaceRequests=0;
+  app=hostedServer({root,origin,adminGithubId:'123',makeWorkspaces:()=>({ensure:async id=>{workspaceRequests++;return {url:`http://127.0.0.1:${worker.address().port}`,token:id};},retain:()=>()=>{},invalidate:()=>{},close:()=>{}})});
   await new Promise(resolve=>app.server.listen(4328,'127.0.0.1',resolve));
   const login=async username=>{
     const r=await fetch(origin+'/account/login',{method:'POST',headers:{Origin:origin},body:JSON.stringify({username,password:`a long password for ${username}`})});
@@ -106,6 +126,22 @@ try {
     return {cookie,Authorization:`Bearer ${(await r.json()).csrf}`};
   };
   const alice=await login('alice'),bob=await login('bob');
+  const adminPath='/account/admin/users';
+  assert.equal((await fetch(origin+'/admin')).status,200,'A bookmarked admin page must load the sign-in shell');
+  assert.equal((await fetch(origin+adminPath)).status,401);
+  assert.equal((await fetch(origin+adminPath,{headers:{cookie:alice.cookie}})).status,401);
+  assert.equal((await fetch(origin+adminPath,{headers:bob})).status,403);
+  assert.equal((await fetch(origin+'/account/session',{headers:{cookie:alice.cookie}}).then(r=>r.json())).isAdmin,true);
+  assert.equal((await fetch(origin+'/account/session',{headers:{cookie:bob.cookie}}).then(r=>r.json())).isAdmin,false);
+  const response=await fetch(origin+adminPath,{headers:alice});
+  assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
+  const overview=await response.json();
+  assert.ok(overview.summary.users>50 && overview.summary.seenUsers>=2 && overview.summary.workspaces>=1);
+  assert.ok(overview.users.every(user=>Object.keys(user).sort().join(',')==='createdAt,hasWorkspace,id,lastSeenAt,signIns,username'));
+  assert.equal((await fetch(origin+adminPath+'?q=pageuser&page=1',{headers:alice}).then(r=>r.json())).users.length,3);
+  for(const query of ['page=-1','page=1.5','page=Infinity','q='+ 'a'.repeat(65)])assert.equal((await fetch(origin+adminPath+'?'+query,{headers:alice})).status,400);
+  assert.equal((await fetch(origin+adminPath,{method:'POST',headers:{...alice,Origin:origin}})).status,405);
+  assert.equal(workspaceRequests,0,'Admin requests must not boot, wake, or query any ML workspace');
   assert.equal((await fetch(origin+'/api/runs')).status,401);
   assert.equal((await fetch(origin+'/api/runs',{headers:{cookie:alice.cookie}})).status,401);
   assert.equal((await fetch(origin+'/account/workspace',{method:'POST',headers:{...alice,Origin:'https://evil.example'}})).status,403);
@@ -118,5 +154,6 @@ try {
   assert.equal((await fetch(origin+'/api/session',{method:'POST',headers:{...alice,Origin:origin}})).status,404);
   assert.equal((await fetch(origin+'/account/logout',{method:'POST',headers:{...alice,Origin:origin}})).status,200);
   assert.equal((await fetch(origin+'/api/runs',{headers:alice})).status,401);
-  console.log('Hosted checks passed: Google/GitHub sign-in, returning Google accounts, workspace-preserving linking, password hashing, persistence, account separation, CSRF, OAuth PKCE/state/replay protection and worker proxy.');
+  assert.equal((await fetch(origin+adminPath,{headers:alice})).status,401);
+  console.log('Hosted checks passed: owner-only admin, migration, pagination, literal search, activity tracking, no worker startup, Google/GitHub sign-in, account separation, CSRF, OAuth PKCE/state/replay protection and worker proxy.');
 } finally {if(app)await app.close();await new Promise(resolve=>worker.close(resolve));await rm(root,{recursive:true,force:true});}

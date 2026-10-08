@@ -43,7 +43,7 @@ const numberLabel = (value: number) => Number.isFinite(value) ? value : "—";
 type Modal = "settings" | "connection" | "connections" | "run-settings" | null;
 type Artifact = { path: string; size: number };
 
-type CloudAccount = { connection: Connection; username: string; agentRevision: number; linkAgent: (agent: AgentId) => void; signOut: () => void; expired: () => void; signInMethods: {id: string; name: string; linked: boolean; connect: () => void}[] };
+type CloudAccount = { connection: Connection; username: string; isAdmin?: boolean; agentRevision: number; linkAgent: (agent: AgentId) => void; signOut: () => void; expired: () => void; signInMethods: {id: string; name: string; linked: boolean; connect: () => void}[] };
 export default function App({ cloud }: { cloud?: CloudAccount }) {
   const [connection, setConnection] = useState<Connection | null>(() => {
     if (cloud) return cloud.connection;
@@ -464,6 +464,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
           </div>)}
           {tools.map((tool) => <details className="tool-detail" key={tool.id}><summary>{tool.name}<span>{tool.status}</span></summary><p>{tool.description}</p></details>)}
           {cloud?.signInMethods.map(method => <div className="runner-row" key={method.id}><span>{method.name} sign-in</span>{method.linked ? <span><Icon name="check" size={14} />Linked</span> : <button onClick={method.connect}>Link account</button>}</div>)}
+          {cloud?.isAdmin && <a className="text-button admin-link" href="/admin">Users & activity ↗</a>}
           {cloud ? <button className="text-button" onClick={cloud.signOut}>Sign out</button> : <button className="text-button advanced-connection" onClick={() => { setError(""); setModal("connection"); }}>Advanced connection</button>}
           {connection?.desktop && <button className="text-button" disabled={!!busy} onClick={() => void quit()}>{active ? "Pause experiment & quit Helix" : "Quit Helix"}</button>}
         </div> : <form onSubmit={(e) => { e.preventDefault(); setModal(null); }}>

@@ -16,8 +16,9 @@ async function body(req) {
   for await (const chunk of req) { if ((length+=chunk.length)>8000) throw new Error('Request too large.'); chunks.push(chunk); }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
-export function hostedServer({root=process.env.HELIX_DATA_DIR || '/data',origin=process.env.HELIX_PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : `http://127.0.0.1:${process.env.PORT||3000}`),makeWorkspaces=workspaces}={}) {
+export function hostedServer({root=process.env.HELIX_DATA_DIR || '/data',origin=process.env.HELIX_PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : `http://127.0.0.1:${process.env.PORT||3000}`),makeWorkspaces=workspaces,adminGithubId=process.env.HELIX_ADMIN_GITHUB_ID || ''}={}) {
   const store=accounts(root), workers=makeWorkspaces(store), oauth=accountOAuth(store,origin), attempts=new Map();
+  const profile = user => ({username:user.username,isAdmin:store.isAdmin(user.id,adminGithubId)});
   let loginWindow=Date.now(), loginCount=0;
   const cookie=(token,age=30*86400)=>`helix_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${origin.startsWith('https:')?'; Secure':''}`;
   const server=createServer(async(req,res)=>{
@@ -62,11 +63,18 @@ export function hostedServer({root=process.env.HELIX_DATA_DIR || '/data',origin=
         const user=await store.signIn(value.username,value.password,value.register===true);
         const session=store.session(user.id);
         res.setHeader('Set-Cookie',cookie(session.token));
-        return respond(200,{username:user.username,csrf:session.csrf});
+        return respond(200,{...profile(user),csrf:session.csrf});
       }
-      if (url.pathname==='/account/session' && req.method==='GET') return respond(200,account ? {username:account.username,csrf:account.csrf} : null);
+      if (url.pathname==='/account/session' && req.method==='GET') return respond(200,account ? {...profile(account),csrf:account.csrf} : null);
       if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/account/')) {
         if (!account || req.headers.authorization!==`Bearer ${account.csrf}`) return respond(401,{error:'Sign in to Helix to continue.'});
+        if (url.pathname==='/account/admin/users') {
+          if (!store.isAdmin(account.id,adminGithubId)) return respond(403,{error:'This page is only available to the Helix owner.'});
+          if (req.method!=='GET') return respond(405,{error:'Method not allowed.'});
+          const query=url.searchParams.get('q') || '', page=Number(url.searchParams.get('page') || 0);
+          if (query.length>64 || !Number.isSafeInteger(page) || page<0 || page>100_000) return respond(400,{error:'Invalid user search.'});
+          return respond(200,store.adminOverview(query,page));
+        }
         if (url.pathname==='/account/logout' && req.method==='POST') {
           store.logout(token);res.setHeader('Set-Cookie',cookie('',0));return respond(200,{signedOut:true});
         }
@@ -88,7 +96,7 @@ export function hostedServer({root=process.env.HELIX_DATA_DIR || '/data',origin=
         } catch (error) { workers.invalidate(account.id); throw error; } finally { release(); }
       }
       if (req.method!=='GET') return respond(405,{error:'Method not allowed.'});
-      const name=url.pathname==='/'?'index.html':decodeURIComponent(url.pathname.slice(1));
+      const name=['/','/admin','/admin/'].includes(url.pathname)?'index.html':decodeURIComponent(url.pathname.slice(1));
       const file=await inside(join(project,'dist'),name);
       res.writeHead(200,{'Content-Type':mime[extname(file)]||'application/octet-stream'});createReadStream(file).pipe(res);
     } catch(error) { if(!res.headersSent)respond(400,{error:error.message});else res.destroy(); }

@@ -16,6 +16,10 @@ export function accounts(root) {
     CREATE TABLE IF NOT EXISTS sessions (hash TEXT PRIMARY KEY, userId TEXT NOT NULL, csrf TEXT NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS identities (provider TEXT NOT NULL, subject TEXT NOT NULL, userId TEXT NOT NULL REFERENCES users(id), PRIMARY KEY(provider,subject), UNIQUE(provider,userId));
     CREATE TABLE IF NOT EXISTS oauth_states (hash TEXT PRIMARY KEY, browser TEXT NOT NULL, provider TEXT NOT NULL, verifier TEXT NOT NULL, userId TEXT, expires INTEGER NOT NULL);`);
+  const columns = db.prepare('PRAGMA table_info(users)').all().map(column => column.name);
+  for (const column of ['createdAt', 'lastSeenAt']) {
+    if (!columns.includes(column)) db.exec(`ALTER TABLE users ADD COLUMN ${column} INTEGER`);
+  }
   const user = id => db.prepare('SELECT id, username, workspace FROM users WHERE id=?').get(id);
   const workspace = value => value?.workspace ? JSON.parse(value.workspace) : null;
   return {
@@ -29,7 +33,7 @@ export function accounts(root) {
       if (register) {
         if (existing) throw new Error('That username is already taken.');
         const id = randomUUID();
-        try { db.prepare('INSERT INTO users(id,username,salt,password) VALUES(?,?,?,?)').run(id,username,salt,key.toString('hex')); }
+        try { db.prepare('INSERT INTO users(id,username,salt,password,createdAt) VALUES(?,?,?,?,?)').run(id,username,salt,key.toString('hex'),Date.now()); }
         catch { throw new Error('That username is already taken.'); }
         return user(id);
       }
@@ -62,7 +66,7 @@ export function accounts(root) {
       try {
         if (!linkUser) {
           const name = String(label || provider).toLowerCase().replace(/[^a-z0-9_-]/g,'').replace(/^[^a-z0-9]+/,'').slice(0,20) || provider;
-          db.prepare('INSERT INTO users(id,username,salt,password) VALUES(?,?,?,?)').run(id,`${name}-${id.slice(0,8)}`,'','');
+          db.prepare('INSERT INTO users(id,username,salt,password,createdAt) VALUES(?,?,?,?,?)').run(id,`${name}-${id.slice(0,8)}`,'','',Date.now());
         } else if (!user(linkUser)) throw new Error('Sign in to your existing account before linking.');
         db.prepare('INSERT INTO identities VALUES(?,?,?)').run(provider,subject,id);
         db.exec('COMMIT');
@@ -73,12 +77,31 @@ export function accounts(root) {
       const token = randomBytes(32).toString('base64url'), csrf = randomBytes(24).toString('base64url');
       db.prepare('DELETE FROM sessions WHERE expires<?').run(Date.now());
       db.prepare('INSERT INTO sessions VALUES(?,?,?,?)').run(digest(token),id,csrf,Date.now()+30*86400_000);
+      db.prepare('UPDATE users SET lastSeenAt=? WHERE id=?').run(Date.now(),id);
       return {token, csrf};
     },
     authenticate(token) {
       if (!/^[A-Za-z0-9_-]{43}$/.test(token || '')) return null;
       const session = db.prepare('SELECT userId, csrf FROM sessions WHERE hash=? AND expires>?').get(digest(token),Date.now());
+      // Record authenticated activity at most once every five minutes per user.
+      if (session) db.prepare('UPDATE users SET lastSeenAt=? WHERE id=? AND (lastSeenAt IS NULL OR lastSeenAt<?)').run(Date.now(),session.userId,Date.now()-300_000);
       return session ? {...user(session.userId),csrf:session.csrf} : null;
+    },
+    isAdmin(id, githubSubject) {
+      return !!githubSubject && !!db.prepare("SELECT 1 FROM identities WHERE userId=? AND provider='github' AND subject=?").get(id,githubSubject);
+    },
+    adminOverview(query = '', page = 0) {
+      const week = Date.now()-7*86400_000, pageSize = 50;
+      const summary = db.prepare(`SELECT count(*) AS users, count(CASE WHEN createdAt>=? THEN 1 END) AS newUsers,
+        count(CASE WHEN lastSeenAt>=? THEN 1 END) AS seenUsers,
+        count(CASE WHEN workspace IS NOT NULL AND workspace!='null' THEN 1 END) AS workspaces FROM users`).get(week,week);
+      const matching = db.prepare('SELECT count(*) AS count FROM users WHERE instr(username,?)>0').get(query.toLowerCase()).count;
+      const rows = db.prepare(`SELECT id, username, createdAt, lastSeenAt, (password!='') AS passwordSignIn,
+        (workspace IS NOT NULL AND workspace!='null') AS hasWorkspace FROM users WHERE instr(username,?)>0
+        ORDER BY lastSeenAt DESC, username, id LIMIT ? OFFSET ?`).all(query.toLowerCase(),pageSize,page*pageSize);
+      const users = rows.map(({passwordSignIn,hasWorkspace,...row}) => ({...row,hasWorkspace:!!hasWorkspace,
+        signIns:[...(passwordSignIn ? ['password'] : []),...db.prepare('SELECT provider FROM identities WHERE userId=? ORDER BY provider').all(row.id).map(identity => identity.provider)]}));
+      return {summary,users,matching,page,pageSize,updatedAt:Date.now()};
     },
     logout(token) { if (token) db.prepare('DELETE FROM sessions WHERE hash=?').run(digest(token)); },
     saveWorkspace(id, value) { db.prepare('UPDATE users SET workspace=? WHERE id=?').run(JSON.stringify(value),id); },
