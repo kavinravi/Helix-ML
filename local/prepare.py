@@ -155,6 +155,8 @@ def estimate_resources(manifest, task, workspace=None):
     text = [c["name"] for c in manifest["schema"] if c["name"] in features and c["type"] == "text"]
     string_bytes = sum(manifest.get("featureStringBytes", {}).get(c, 0) for c in text)
     matrix_bytes = n * len(features) * 8 + n * len(text) * 64 + string_bytes * 4
+    if manifest.get("featureEncoding") == "mixed-v1":
+        matrix_bytes += string_bytes * 16 + n * len(text) * 16
     outputs = len(manifest["classes"]) if task["metric"] == "log_loss" else (task.get("dimensions") or 2) if manifest["taskType"] == "reduction" else 1
     if manifest["taskType"] == "reduction" and task.get("reductionMode") == "variance":
         outputs = len(features)
@@ -332,10 +334,12 @@ def inspect_dataset(task, columns_only=False):
     if metric == "auroc" and len(classes) != 2:
         raise ValueError("AUROC supports binary classification; choose accuracy or log loss for multiple classes.")
     if unsupervised:
-        if assets or any(item["type"] != "number" for item in schema if item["name"] in features):
-            raise ValueError("Clustering and dimensionality reduction currently need numeric CSV features. Exclude text, labels, IDs, and asset paths or supply numeric embeddings.")
-        if learning == "reduction" and task.get("reductionMode", "dimensions") == "dimensions" and (type(task.get("dimensions", 2)) is not int or not 1 <= task.get("dimensions", 2) < len(features)):
-            raise ValueError("Output dimensions must be at least 1 and fewer than the number of input features.")
+        if assets:
+            raise ValueError("Clustering and dimensionality reduction accept numeric, categorical, and text CSV columns. Image/audio asset files still need numeric embeddings; exclude asset paths or supply embeddings.")
+        numeric_only = all(item["type"] == "number" for item in schema if item["name"] in features)
+        dimensions = task.get("dimensions", 2)
+        if learning == "reduction" and task.get("reductionMode", "dimensions") == "dimensions" and (type(dimensions) is not int or dimensions < 1 or (numeric_only and dimensions >= len(features))):
+            raise ValueError("Output dimensions must be at least 1 and fewer than the number of encoded input features.")
     with source.open("rb") as handle:
         digest = hashlib.file_digest(handle, "sha256")
     source_hash = digest.hexdigest()
@@ -352,6 +356,8 @@ def inspect_dataset(task, columns_only=False):
                 "assets": files, "assetBytes": total, "duplicateRows": duplicate_rows,
                 "splitStrategy": strategy, "splitColumn": split_column, "featureStringBytes": sizes,
                 "warnings": ["Confirm that rows are independent; hidden repeated entities cannot be detected automatically."] if strategy == "independent" else []}
+    if unsupervised:
+        manifest["featureEncoding"] = "mixed-v1"
     manifest["resources"] = estimate_resources(manifest, task)
     manifest["resources"]["preparationBytes"] = preparation_bytes
     return source, rows, manifest
@@ -587,6 +593,8 @@ def materialize(evaluation, destination, fold_id):
     public = {k: manifest[k] for k in ("target", "metric", "features", "classes", "assetColumns", "taskType")}
     if unsupervised:
         public.update({k: manifest[k] for k in ("dimensions", "reductionMode", "varianceTarget")})
+        if "featureEncoding" in manifest:
+            public["featureEncoding"] = manifest["featureEncoding"]
     dump(destination / "manifest.json", public)
     dump(destination / "classes.json", manifest["classes"])
     for name in names:

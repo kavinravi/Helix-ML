@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile, rm, readdir, lstat, rename } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile, rm, readdir, lstat, rename, cp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -64,7 +64,11 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
   const folder = join(root, run.id), evaluation = join(folder, "evaluation");
   const protocol = await json(join(evaluation, "protocol.json"));
   const metadata = await json(join(evaluation, "manifest.json"));
-  const source = await sourceFingerprint(workspace);
+  let source = await sourceFingerprint(workspace);
+  if (["clustering", "reduction"].includes(metadata.taskType)) {
+    await cp(join(harness, "helix_features.py"), join(workspace, "helix_features.py"));
+    source = await sourceFingerprint(workspace);
+  }
   if (!source.files.includes("train.py")) throw new Error("The candidate must provide train.py.");
   const capacity = await runProcess(python(), [preparer, "--evaluation", evaluation, "--resources", workspace], { signal, timeout: remainingTime(deadline) });
   const resources = JSON.parse(capacity.output);

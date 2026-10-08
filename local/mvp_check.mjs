@@ -32,15 +32,15 @@ try {
     task.objective = "Predict short or long from the numeric measurements using a DecisionTreeClassifier. Start with the defaults; tuning is allowed in later trials.";
   }
   if (process.env.HELIX_TEST_UNSUPERVISED === "1") {
-    await writeFile(join(dataset, "train.csv"), "length,width,depth,mass,label\n" + Array.from({ length: 90 }, (_, i) => `${i / 10},${(i * 17 % 31) / 10},${i / 5 + Math.sin(i)},${i / 3 + Math.cos(i)},${i < 45 ? "short" : "long"}`).join("\n"));
-    task = { ...task, target: "", objective: "Use PCA for dimensionality reduction, retaining at least 90% cumulative variance after standardizing the numeric features. Exclude label. Maximize trustworthiness.", reductionMode: "variance", varianceTarget: .9, dimensions: 2, trials: 1, minutes: 10, output: "py", testFraction: .2 };
+    await writeFile(join(dataset, "train.csv"), "length,width,depth,mass,color,description,label\n" + Array.from({ length: 90 }, (_, i) => `${i / 10},${(i * 17 % 31) / 10},${i / 5 + Math.sin(i)},${i / 3 + Math.cos(i)},${i%2 ? "red" : "blue"},${i%2 ? "apple fruit orchard" : "ocean waves water"} sample${i},${i < 45 ? "short" : "long"}`).join("\n"));
+    task = { ...task, target: "", objective: "Use PCA for dimensionality reduction, retaining at least 90% cumulative variance of the reference-encoded features. Include the numeric features, categorical color, and free-text description. Exclude label. Maximize trustworthiness.", reductionMode: "variance", varianceTarget: .9, dimensions: 2, trials: 1, minutes: 10, output: "py", testFraction: .2 };
     const proposed = await request("/tasks/plan", task);
     assert.equal(proposed.status, 200, JSON.stringify(proposed.body));
     task = proposed.body.task;
     assert.equal(task.learning, "reduction"); assert.equal(task.model, "sklearn.decomposition.PCA"); assert.equal(task.metric, "trustworthiness"); assert.equal(task.target, "");
-    assert.ok(task.excludedColumns.includes("label"));
+    assert.deepEqual(task.excludedColumns,["label"]);
     assert.equal((await request("/runs")).body.length, 0, "Planning must not start training");
-    console.log("Native planning passed: PCA with 90% variance, excluded label, awaiting confirmation.");
+    console.log("Native planning passed: mixed numeric/category/text PCA with 90% variance, excluded label, awaiting confirmation.");
   }
   const requestedAt = Date.now();
   const started = await request("/runs", task);

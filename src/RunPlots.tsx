@@ -35,7 +35,7 @@ function Projection({ value }: { value: NonNullable<Run["projection"]> }) {
   return <figure className="metric-plot">
     <figcaption>{value.kind === "clustering" ? "Cluster assignments" : "Reduced dimensions"}</figcaption>
     <p className="projection-note">{value.scope} · {value.points.length} of {value.rows.toLocaleString()} rows{value.dimensions != null && ` · ${value.dimensions} dimensions`}{value.cumulativeVariance != null && ` · ${(100 * value.cumulativeVariance).toFixed(1)}% variance retained`}</p>
-    <svg viewBox="0 0 570 210" role="img" aria-label={`${value.kind === "clustering" ? "Clusters in the first two scaled input features" : "First two output dimensions"}. Values available below.`}>
+    <svg viewBox="0 0 570 210" role="img" aria-label={`${value.kind === "clustering" ? "Clusters in the first two encoded input features" : "First two output dimensions"}. Values available below.`}>
       <line className="plot-grid" x1="62" x2="542" y1="174" y2="174" /><line className="plot-grid" x1="62" x2="62" y1="32" y2="174" />
       {value.points.map(p => <circle key={p.row} cx={x(p.x)} cy={y(p.y)} r="3" opacity=".8" fill={colors[(p.cluster ?? 0) % colors.length]}><title>Row {p.row}{p.cluster != null ? ` · Cluster ${p.cluster}` : ""}: {p.x.toPrecision(4)}, {p.y.toPrecision(4)}</title></circle>)}
       <text x="302" y="202" textAnchor="middle">{value.axes[0]}</text><text x="18" y="104" textAnchor="middle" transform="rotate(-90 18 104)">{value.axes[1]}</text>
