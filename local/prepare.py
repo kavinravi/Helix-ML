@@ -185,7 +185,7 @@ def estimate_resources(manifest, task, workspace=None):
         calls = [(task.get("model", "").split(".")[-1], {})]
     notes = ["Estimated working memory; learned model size and generated code can use more."]
     if incremental and chunked:
-        estimate = base + min(n, 10000) * len(features) * 8 * 6 + output_bytes * 2
+        estimate = base + min(n, 10000) * math.ceil(matrix_bytes / n) * 6 + output_bytes * 2
         notes.append("Chunked CSV input and partial_fit detected; data-buffer estimate uses at most 10,000 rows.")
     pairwise = {"KernelPCA", "MDS", "Isomap", "SpectralClustering", "SpectralEmbedding", "GaussianProcessRegressor", "GaussianProcessClassifier", "AgglomerativeClustering"}
     model_bytes = 0

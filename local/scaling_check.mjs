@@ -75,6 +75,8 @@ assert small['estimatedFitBytes']<small['limitBytes']<estimate_resources(wide,t)
 source=root/'million'/'source'
 (source/'train.py').write_text('import pandas as pd\nreader=pd.read_csv("train.csv",chunksize=5000)\nmodel.partial_fit(batch)')
 assert estimate_resources(wide,t,source)['estimatedFitBytes']<small['limitBytes']
+long_text={**m,'rows':100000,'features':['text'],'schema':[{'name':'text','type':'text'}],'featureStringBytes':{'text':1000000000}}
+assert estimate_resources(long_text,t,source)['estimatedFitBytes']>small['limitBytes']
 assert estimate_resources({**wide,'taskType':'clustering'},t,source)['estimatedScoringBytes']>small['limitBytes']
 (source/'train.py').write_text('from sklearn.decomposition import KernelPCA as KP\nmodel=KP()')
 assert estimate_resources(m,t,source)['estimatedFitBytes']>small['limitBytes']
