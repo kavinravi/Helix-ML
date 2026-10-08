@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { resolve, join, dirname, basename, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { providers } from "./agents.mjs";
-import { loadRuns, snapshot, createRun, execute, saveRun, log, elapsed, discussRun, continueRun } from "./engine.mjs";
+import { loadRuns, snapshot, createRun, execute, saveRun, log, elapsed, discussRun, continueRun, proposeTask } from "./engine.mjs";
 import { inside, redact, validateTask } from "./validate.mjs";
 import { runProcess } from "./process.mjs";
 import { runtimeStatus, cleanupContainers } from "./runtime.mjs";
@@ -341,6 +341,22 @@ export async function createService({
       }
       if (path === "/tools" && request.method === "GET")
         return respond(200, await toolStatus());
+      if (path === "/tasks/plan" && request.method === "POST") {
+        if (active || starting || chatting || verification) return respond(409, { error: "Wait for the current experiment or agent check to finish." });
+        starting = true;
+        const controller = new AbortController();
+        const cancel = () => { if (!response.writableFinished) controller.abort(); };
+        response.once("close", cancel);
+        try {
+          const body = await jsonBody(request);
+          // Task and metric are provisional here; fully validate the agent's proposal before returning it.
+          const draft = validateTask({ ...body, learning: "supervised", metric: "accuracy", target: body.target || "__pending_target__", searchModels: true, model: "" });
+          draft.target = typeof body.target === "string" ? body.target.trim() : "";
+          const provider = (await getProviders()).find(p => p.id === draft.agent);
+          if (!provider?.authenticated) throw new Error("Connect your coding agent before reviewing an experiment.");
+          return respond(200, await proposeTask(draft, { signal: AbortSignal.any([shutdown.signal, controller.signal]) }));
+        } finally { starting = false; response.removeListener("close", cancel); }
+      }
       if (path === "/datasets/inspect" && request.method === "POST") {
         const task = validateTask(await jsonBody(request));
         const controller = new AbortController();

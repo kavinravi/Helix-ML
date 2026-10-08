@@ -18,7 +18,7 @@ import shutil
 from statistics import fmean, median
 import tempfile
 
-METRICS = {"accuracy", "auroc", "log_loss", "rmse", "mae"}
+METRICS = {"accuracy", "auroc", "log_loss", "rmse", "mae", "silhouette", "davies_bouldin", "trustworthiness"}
 MAX_CSV = 128 * 1024 * 1024
 MAX_ASSETS = 2 * 1024 ** 3
 
@@ -79,7 +79,7 @@ def column_schema(rows, columns, assets):
     return schema
 
 
-def inspect_dataset(task):
+def inspect_dataset(task, columns_only=False):
     source = Path(task["dataset"]).expanduser().resolve()
     if source.is_dir():
         source = next((source / name for name in ("train.csv", "labels.csv", "metadata.csv")
@@ -94,25 +94,32 @@ def inspect_dataset(task):
         raise ValueError("CSV files are limited to 128 MiB in the CPU MVP.")
     reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline=""))
     columns = reader.fieldnames
-    target, metric = task["target"], task["metric"]
+    learning = task.get("learning", "supervised")
+    if learning not in {"supervised", "clustering", "reduction"}:
+        raise ValueError("Choose a supported learning mode.")
+    unsupervised = learning != "supervised"
+    target, metric = ("" if unsupervised else task["target"]), task["metric"]
     if not columns or any(not c.strip() for c in columns) or len(set(columns)) != len(columns):
         raise ValueError("CSV column names must be nonempty and unique.")
     if len(columns) > 200:
         raise ValueError("The CPU MVP supports up to 200 CSV columns.")
-    if target not in columns:
+    if columns_only:
+        return columns
+    if not unsupervised and target not in columns:
         raise ValueError(f"Target column {target!r} is absent. Columns: {', '.join(columns)}")
-    if metric not in METRICS:
-        raise ValueError("Choose a supported classification or regression metric.")
+    allowed = {"silhouette", "davies_bouldin"} if learning == "clustering" else {"trustworthiness"} if learning == "reduction" else {"accuracy", "auroc", "log_loss", "rmse", "mae"}
+    if metric not in allowed:
+        raise ValueError("Choose a metric for the selected learning mode.")
     rows = []
     for row in reader:
         rows.append(row)
         if len(rows) > 100_000:
-            raise ValueError("The CPU MVP supports up to 100,000 labeled rows.")
+            raise ValueError("The CPU MVP supports up to 100,000 rows.")
     if len(rows) < 10:
-        raise ValueError("At least 10 labeled rows are needed; classification and CV may need more.")
+        raise ValueError("At least 10 rows are needed; classification and CV may need more.")
     if any(None in row or any(v is None for v in row.values()) for row in rows):
         raise ValueError("Every CSV row must have the same number of fields as the header.")
-    if any(not row[target].strip() for row in rows):
+    if not unsupervised and any(not row[target].strip() for row in rows):
         raise ValueError("Every row must have a target. Remove or label the missing targets first.")
     classification = metric in {"accuracy", "auroc", "log_loss"}
     classes = sorted({r[target] for r in rows}) if classification else []
@@ -122,7 +129,7 @@ def inspect_dataset(task):
         raise ValueError("The CPU MVP supports up to 1,000 classes.")
     if metric == "auroc" and len(classes) != 2:
         raise ValueError("AUROC supports binary classification; choose accuracy or log loss for multiple classes.")
-    if not classification:
+    if not classification and not unsupervised:
         try:
             if any(not math.isfinite(float(r[target])) for r in rows):
                 raise ValueError()
@@ -135,13 +142,23 @@ def inspect_dataset(task):
     if strategy != "independent" and (split_column not in columns or split_column == target
                                       or any(not r[split_column].strip() for r in rows)):
         raise ValueError("Select a non-target group/time column with a value in every row.")
-    features = [c for c in columns if c not in {target, split_column}]
+    excluded = task.get("excludedColumns", [])
+    if not isinstance(excluded, list) or any(c not in columns for c in excluded):
+        raise ValueError("Excluded columns must exist in the CSV.")
+    if target and target in excluded:
+        raise ValueError("The target cannot also be excluded.")
+    features = [c for c in columns if c not in {target, split_column} and c not in excluded]
     if not features:
-        raise ValueError("Include at least one input column in addition to target and group/time columns.")
+        raise ValueError("Include at least one input column after excluding target, group/time, and excluded columns.")
     assets = task.get("assetColumns", [])
     if (not isinstance(assets, list) or len(set(assets)) != len(assets)
             or any(c not in features for c in assets)):
         raise ValueError("Asset columns must be unique input column names.")
+    if unsupervised:
+        if assets or any(item["type"] != "number" for item in column_schema(rows, features, [])):
+            raise ValueError("Clustering and dimensionality reduction currently need numeric CSV features. Exclude text, labels, IDs, and asset paths or supply numeric embeddings.")
+        if learning == "reduction" and task.get("reductionMode", "dimensions") == "dimensions" and (type(task.get("dimensions", 2)) is not int or not 1 <= task.get("dimensions", 2) < len(features)):
+            raise ValueError("Output dimensions must be at least 1 and fewer than the number of input features.")
     files, total = {}, 0
     for column in assets:
         for name in sorted({row[column] for row in rows}):
@@ -172,7 +189,9 @@ def inspect_dataset(task):
     schema = column_schema(rows, columns, assets)
     fingerprint = hashlib.sha256(raw + json.dumps(files, sort_keys=True).encode()).hexdigest()
     manifest = {"version": 2, "fingerprint": fingerprint, "rows": len(rows), "target": target,
-                "metric": metric, "taskType": "classification" if classification else "regression",
+                "metric": metric, "taskType": learning if unsupervised else "classification" if classification else "regression",
+                "dimensions": task.get("dimensions", 2), "reductionMode": task.get("reductionMode", "dimensions"),
+                "varianceTarget": task.get("varianceTarget", .95),
                 "features": features, "classes": classes, "schema": schema, "assetColumns": assets,
                 "assets": files, "assetBytes": total, "duplicateRows": duplicate_rows,
                 "splitStrategy": strategy, "splitColumn": split_column,
@@ -230,6 +249,10 @@ def make_protocol(task, rows, manifest):
         return [i for i in ids if i not in selected], sorted(held)
 
     def check(train, validation):
+        if manifest["taskType"] in {"clustering", "reduction"} and (len(train) < 3 or len(validation) < 3):
+            raise ValueError("Unsupervised evaluation needs at least 3 training and 3 evaluation rows in every split. Add rows, use fewer folds, or adjust the split.")
+        if manifest["taskType"] == "reduction" and manifest["reductionMode"] == "dimensions" and len(train) <= manifest["dimensions"]:
+            raise ValueError("Each training split needs more rows than the requested output dimensions.")
         if not train or not validation or set(train) & set(validation):
             raise ValueError("The requested evaluation produces an empty or overlapping partition.")
         if classes and (set(rows[i][target] for i in train) != set(classes)
@@ -357,11 +380,16 @@ def materialize(evaluation, destination, fold_id):
         rows = list(csv.DictReader(handle))
     # Without a test split, final inputs only check export/reload and receive no score.
     fold = {"train": protocol["development"], "validation": (protocol["test"] if fold_id == "final" else []) or protocol["evaluations"][0]["validation"]} if fold_id in {"final", "refit"} else next(f for f in protocol["evaluations"] if f["id"] == fold_id)
+    unsupervised = manifest["taskType"] in {"clustering", "reduction"}
+    if unsupervised and fold_id in {"final", "refit"} and (fold_id == "refit" or not protocol["test"]):
+        fold["validation"] = protocol["development"]
     destination.mkdir(parents=True, exist_ok=False)
-    write_csv(destination / "train.csv", manifest["features"] + [manifest["target"]], (rows[i] for i in fold["train"]))
+    write_csv(destination / "train.csv", manifest["features"] + ([] if unsupervised else [manifest["target"]]), (rows[i] for i in fold["train"]))
     write_csv(destination / "validation.csv", manifest["features"], (rows[i] for i in fold["validation"]))
     # No whole-dataset statistics, paths, labels, or other folds enter this mount.
     public = {k: manifest[k] for k in ("target", "metric", "features", "classes", "assetColumns", "taskType")}
+    if unsupervised:
+        public.update({k: manifest[k] for k in ("dimensions", "reductionMode", "varianceTarget")})
     dump(destination / "manifest.json", public)
     dump(destination / "classes.json", manifest["classes"])
     names = {rows[i][c] for i in fold["train"] + fold["validation"] for c in manifest["assetColumns"]}
@@ -372,6 +400,8 @@ def materialize(evaluation, destination, fold_id):
         with output.open("rb") as handle:
             if hashlib.file_digest(handle, "sha256").hexdigest() != manifest["assets"][name]["sha256"]:
                 raise ValueError("A prepared asset was modified. Start a new run.")
+    if unsupervised:
+        return {"targets": [None] * len(fold["validation"]), "baseline": None}
     return {"targets": [rows[i][manifest["target"]] for i in fold["validation"]],
             "baseline": reference_prediction(manifest["metric"],
                 [rows[i][manifest["target"]] for i in fold["train"]], manifest["classes"])}
@@ -382,6 +412,7 @@ if __name__ == "__main__":
     parser.add_argument("--task")
     parser.add_argument("--output")
     parser.add_argument("--inspect", action="store_true")
+    parser.add_argument("--columns", action="store_true")
     parser.add_argument("--evaluation")
     parser.add_argument("--fold")
     parser.add_argument("--truth")
@@ -394,7 +425,9 @@ if __name__ == "__main__":
                 result = {"rows": len(result["targets"])}
         else:
             task = json.loads(Path(args.task).read_text())
-            if args.inspect:
+            if args.columns:
+                result = inspect_dataset(task, columns_only=True)
+            elif args.inspect:
                 _, rows, result = inspect_dataset(task)
                 protocol = make_protocol(task, rows, result)
                 result.update({"developmentRows": len(protocol["development"]), "testRows": len(protocol["test"]),

@@ -74,9 +74,10 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
   await mkdir(models, { recursive: true });
   await mkdir(packages, { recursive: true });
   const unscoredRefit = final && (!!run.followup || !protocol.test.length);
-  const folds = final ? [{ id: "final", seed: protocol.seeds[0], fold: 1, train: protocol.development, validation: !unscoredRefit ? protocol.test : protocol.evaluations[0].validation }] : protocol.evaluations;
+  const unsupervised = ["clustering", "reduction"].includes(metadata.taskType);
+  const folds = final ? [{ id: "final", seed: protocol.seeds[0], fold: 1, train: protocol.development, validation: !unscoredRefit ? protocol.test : unsupervised ? protocol.development : protocol.evaluations[0].validation }] : protocol.evaluations;
   const results = [], baselineResults = [];
-  let baselineName, trainingHistory;
+  let baselineName, trainingHistory, projection;
   for (const fold of folds) {
     if (signal?.aborted) throw new Error("Interrupted");
     if (expired(deadline)) throw new Error("Time limit reached before the evaluation protocol finished.");
@@ -91,6 +92,8 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
         signal, timeout: remainingTime(deadline),
       });
       const config = {
+        learning: run.task.learning || "supervised", dimensions: run.task.dimensions ?? 2,
+        reductionMode: run.task.reductionMode || "dimensions", varianceTarget: run.task.varianceTarget ?? .95,
         metric: run.task.metric, seed: fold.seed, policy: run.task.policy,
         model: run.task.model, searchModels: run.task.searchModels,
         exportModel: run.task.exportModel, exportFormat: run.task.exportFormat,
@@ -106,6 +109,24 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
       });
       if ((await lstat(join(output, "predictions.json"))).size > 64_000_000) throw new Error("Predictions exceed the 64 MB limit.");
       const predictions = await json(join(output, "predictions.json"));
+      let measured;
+      if (unsupervised) {
+        const scoring = join(scratch, "scoring");
+        await mkdir(scoring);
+        // Canonical JSON only. No generated code, packages, symlinks or pickles enter the scorer.
+        await writeFile(join(scoring, "predictions.json"), JSON.stringify(predictions));
+        await container(context, ["python", "/harness/unsupervised.py", "/data", "/work", String(fold.seed), ...(unscoredRefit ? ["--unscored"] : [])], {
+          signal, writable: scoring, mounts: [[harness, "/harness"], [data, "/data"], [scoring, "/work", "rw"]],
+        });
+        measured = await json(join(scoring, "score.json"));
+        if (final) {
+          projection = { ...measured.projection, scope: run.followup ? "Training pool" : protocol.test.length ? "Test rows" : "Full dataset" };
+          projection.points = projection.points.map(point => ({ ...point, row: fold.validation[point.row] }));
+          const columns = metadata.taskType === "clustering" ? ["cluster"] : Array.from({ length: measured.dimensions }, (_, i) => `dimension_${i + 1}`);
+          await writeFile(join(output, "representation.csv"), ["row_index," + columns.join(","), ...predictions.map((value, i) => [fold.validation[i], ...(Array.isArray(value) ? value : [value])].join(","))].join("\n") + "\n");
+          await writeFile(join(output, "projection.json"), JSON.stringify(projection));
+        }
+      }
       if (final) {
         try {
           const historyFile = join(output, "training_history.json");
@@ -123,14 +144,18 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
         onEvent("export", `${fold.id}: ${format} export reloaded; predictions match.`);
       }
       const { targets: truth, baseline } = await json(truthPath);
-      baselineName = baseline.name;
-      const baselineScore = scorePredictions(run.task.metric, truth, Array(truth.length).fill(baseline.prediction), metadata.classes);
-      baselineResults.push({ score: baselineScore });
+      let baselineScore = null;
+      if (baseline) {
+        baselineName = baseline.name;
+        baselineScore = scorePredictions(run.task.metric, truth, Array(truth.length).fill(baseline.prediction), metadata.classes);
+        baselineResults.push({ score: baselineScore });
+      }
       // Validate prediction shape/values even for an unscored refit. Never report its in-sample score.
-      const checkedScore = scorePredictions(run.task.metric, truth, predictions, metadata.classes);
+      const checkedScore = unsupervised ? measured.score : scorePredictions(run.task.metric, truth, predictions, metadata.classes);
       const score = unscoredRefit ? null : checkedScore;
       const result = { id: fold.id, seed: fold.seed, fold: fold.fold, trainingRows: fold.train.length,
-        validationRows: fold.validation.length, score, baselineScore: unscoredRefit ? null : baselineScore, duration: (Date.now() - started) / 1000 };
+        validationRows: fold.validation.length, score, baselineScore: unscoredRefit ? null : baselineScore, duration: (Date.now() - started) / 1000,
+        ...(measured ? { scoringRows: measured.scoringRows, ...(measured.dimensions !== undefined ? { dimensions: measured.dimensions } : {}), ...(measured.cumulativeVariance !== undefined ? { cumulativeVariance: measured.cumulativeVariance } : {}) } : {}) };
       results.push(result);
       await writeFile(join(scratch, "result.json"), JSON.stringify(result), { mode: 0o600 });
       onEvent("evaluation", score === null ? "Final refit complete. No test score requested." : `${fold.id} scored ${score.toFixed(6)}.`);
@@ -142,8 +167,8 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
   }
   if ((await sourceFingerprint(workspace)).sha256 !== source.sha256)
     throw new Error("Candidate source changed during evaluation; its scores cannot be accepted.");
-  const baseline = unscoredRefit ? null : { name: baselineName, ...aggregateScores(baselineResults, folds.length) };
-  return { ...(unscoredRefit ? { score: null, deviation: null, foldScores: [], evaluations: results } : aggregateScores(results, folds.length)), baseline, ...(trainingHistory ? { trainingHistory } : {}), protocolHash: protocol.sha256, sourceHash: source.sha256 };
+  const baseline = unscoredRefit || unsupervised ? null : { name: baselineName, ...aggregateScores(baselineResults, folds.length) };
+  return { ...(unscoredRefit ? { score: null, deviation: null, foldScores: [], evaluations: results } : aggregateScores(results, folds.length)), baseline, ...(projection ? { projection } : {}), ...(trainingHistory ? { trainingHistory } : {}), protocolHash: protocol.sha256, sourceHash: source.sha256 };
 }
 
 export async function evaluateFinal(root, run, workspace, options) {

@@ -2,7 +2,7 @@
 async page => {
   const check=(condition,message)=>{if(!condition)throw new Error(message);};
   const origin=new URL(page.url()).origin;
-  const objective='Predict short or long from length and width';
+  const objective='Predict short or long from length and width using a DecisionTreeClassifier';
   const task={agent:'codex',dataset:'/example/measurements.csv',target:'label',objective,metric:'accuracy',minutes:5,trials:3,searchModels:false,model:'DecisionTreeClassifier',output:'py',exportModel:true,exportFormat:'native',validation:'holdout',folds:3,seeds:[42],testFraction:.2,holdoutFraction:.2,splitStrategy:'independent',groupColumn:'',timeColumn:'',assetColumns:[],policy:{augmentation:false,regularization:false,features:false,tuning:false,pretrained:false,ensemble:false}};
   const previous={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',task,status:'completed',phase:'complete',createdAt:'2026-01-01T00:00:00Z',startedAt:null,elapsed:120,trials:[],logs:[],best:null,score:.73,next:0};
   const next={...previous,id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',status:'running',phase:'baseline',score:.89};
@@ -18,6 +18,7 @@ async page => {
     if(path==='/account/workspace')return json({ready:true});
     if(path==='/api/providers')return json([{id:'codex',name:'Codex',installed:true,authenticated:true,capability:{status:'verified'}}]);
     if(path==='/api/tools')return json([{id:'runtime',name:'Training',status:'Ready'}]);
+    if(path==='/api/tasks/plan') return json({task:route.request().postDataJSON(),reason:'Use classification.'});
     if(path==='/api/runs'){
       if(route.request().method()==='POST'){
         requests++;
@@ -42,6 +43,7 @@ async page => {
   const send=async()=>{
     const requested=page.waitForRequest(request=>request.url()===origin+'/api/runs'&&request.method()==='POST');
     await page.getByRole('button',{name:'Run experiment',exact:true}).click();
+    await page.getByRole('button',{name:'Start experiment',exact:true}).click();
     await pending().waitFor();await requested;await frames();
     check(Object.keys(task).every(key=>JSON.stringify(submittedTask[key])===JSON.stringify(task[key])),'The repeated experiment must keep the exact previous settings');
   };
@@ -55,12 +57,12 @@ async page => {
   await startAgain();
   check(await pending().getAttribute('aria-current')==='page','A repeated experiment must immediately select its own Starting entry');
   check(await history.locator('.history-row').count()===2,'Both identical experiments must be visible during startup');
-  check(await page.getByText('Preparing your experiment',{exact:true}).isVisible(),'The new task needs its own startup view');
+  check(await page.getByText('Starting your experiment',{exact:true}).isVisible(),'The new task needs its own startup view');
   check(await past().isEnabled(),'Startup must not lock finished experiments');
   holdRead=true;
   await past().click();await oldHeading.waitFor();
   check(await page.getByText('0.7300',{exact:true}).isVisible(),'Opening history must show the previous result');
-  await pending().click();await page.getByText('Preparing your experiment',{exact:true}).waitFor();
+  await pending().click();await page.getByText('Starting your experiment',{exact:true}).waitFor();
   await past().click();await oldHeading.waitFor();
   // Hold an old poll until after POST succeeds to reproduce stale history responses.
   for(let attempt=0;!releaseRead&&attempt<300;attempt++)await frames();
@@ -79,7 +81,7 @@ async page => {
   const failed=history.getByRole('button',{name:objective+' Failed',exact:true});await failed.waitFor();
   check(await oldHeading.isVisible(),'A startup failure must not replace the previous experiment');
   await failed.click();await page.getByText('Startup test failure',{exact:true}).waitFor();
-  await page.getByRole('button',{name:'Edit message',exact:true}).click();
+  await page.getByRole('button',{name:'Edit message & settings',exact:true}).click();
   check(await page.getByRole('textbox',{name:'Experiment message',exact:true}).inputValue()===objective,'A failed start must keep the message for retry');
   finishStart=null;failStart=false;
   await send();

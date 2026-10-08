@@ -1,11 +1,11 @@
-export const METRICS = ["accuracy", "auroc", "log_loss", "rmse", "mae"];
+export const METRICS = ["accuracy", "auroc", "log_loss", "rmse", "mae", "silhouette", "davies_bouldin", "trustworthiness"];
 export const higherIsBetter = (metric) =>
-  metric === "accuracy" || metric === "auroc";
+  ["accuracy", "auroc", "silhouette", "trustworthiness"].includes(metric);
 export const isBetter = (metric, score, best) =>
   best === null || (higherIsBetter(metric) ? score > best : score < best);
 
 export function scorePredictions(metric, truth, predictions, classes = []) {
-  if (!METRICS.includes(metric)) throw new Error("Unsupported metric");
+  if (!["accuracy", "auroc", "log_loss", "rmse", "mae"].includes(metric)) throw new Error("Unsupported prediction metric");
   if (!Array.isArray(truth) || !truth.length)
     throw new Error("Evaluation targets must be a nonempty array.");
   if (["accuracy", "auroc", "log_loss"].includes(metric)) {

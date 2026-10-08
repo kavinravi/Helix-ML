@@ -20,7 +20,7 @@ try {
     const response = await fetch(url + "/api" + path, { method: body ? "POST" : "GET", headers: { Authorization: `Bearer ${service.token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
     return { status: response.status, body: await response.json() };
   };
-  const task = { agent: process.env.HELIX_TEST_AGENT || "claude", dataset, target: "label", objective: "Predict short or long from the numeric measurements. Use a plain unpruned sklearn.tree.DecisionTreeClassifier with all default parameters except random_state; no package installs are needed.", metric: "accuracy", minutes: 15, trials: 3, searchModels: false, model: "sklearn.tree.DecisionTreeClassifier", output: "ipynb", exportModel: true, exportFormat: "joblib", validation: "holdout", folds: 3, seeds: [42], splitStrategy: "independent", groupColumn: "", timeColumn: "", assetColumns: [], policy: { augmentation: false, regularization: false, features: false, tuning: false, pretrained: false, ensemble: false } };
+  let task = { agent: process.env.HELIX_TEST_AGENT || "claude", dataset, target: "label", objective: "Predict short or long from the numeric measurements. Use a plain unpruned sklearn.tree.DecisionTreeClassifier with all default parameters except random_state; no package installs are needed.", metric: "accuracy", minutes: 15, trials: 3, searchModels: false, model: "sklearn.tree.DecisionTreeClassifier", output: "ipynb", exportModel: true, exportFormat: "joblib", validation: "holdout", folds: 3, seeds: [42], splitStrategy: "independent", groupColumn: "", timeColumn: "", assetColumns: [], policy: { augmentation: false, regularization: false, features: false, tuning: false, pretrained: false, ensemble: false } };
   task.output = process.env.HELIX_TEST_OUTPUT || task.output;
   task.exportFormat = process.env.HELIX_TEST_FORMAT || task.exportFormat;
   if (process.env.HELIX_TEST_SEARCH === "1") {
@@ -30,6 +30,17 @@ try {
   if (process.env.HELIX_TEST_FOLLOWUP === "1") {
     task.trials = 1; task.policy.tuning = true; task.minutes = 5;
     task.objective = "Predict short or long from the numeric measurements using a DecisionTreeClassifier. Start with the defaults; tuning is allowed in later trials.";
+  }
+  if (process.env.HELIX_TEST_UNSUPERVISED === "1") {
+    await writeFile(join(dataset, "train.csv"), "length,width,depth,mass,label\n" + Array.from({ length: 90 }, (_, i) => `${i / 10},${(i * 17 % 31) / 10},${i / 5 + Math.sin(i)},${i / 3 + Math.cos(i)},${i < 45 ? "short" : "long"}`).join("\n"));
+    task = { ...task, target: "", objective: "Use PCA for dimensionality reduction, retaining at least 90% cumulative variance after standardizing the numeric features. Exclude label. Maximize trustworthiness.", reductionMode: "variance", varianceTarget: .9, dimensions: 2, trials: 1, minutes: 10, output: "py", testFraction: .2 };
+    const proposed = await request("/tasks/plan", task);
+    assert.equal(proposed.status, 200, JSON.stringify(proposed.body));
+    task = proposed.body.task;
+    assert.equal(task.learning, "reduction"); assert.equal(task.model, "sklearn.decomposition.PCA"); assert.equal(task.metric, "trustworthiness"); assert.equal(task.target, "");
+    assert.ok(task.excludedColumns.includes("label"));
+    assert.equal((await request("/runs")).body.length, 0, "Planning must not start training");
+    console.log("Native planning passed: PCA with 90% variance, excluded label, awaiting confirmation.");
   }
   const requestedAt = Date.now();
   const started = await request("/runs", task);
@@ -68,6 +79,7 @@ try {
   assert.equal(run.trials.length, task.searchModels ? 3 : 1);
   assert.ok(run.trials.every(trial => Number.isFinite(trial.score)), "Each scheduled candidate must produce a measured score");
   await writeFile(join(root, "timing.json"), JSON.stringify({ agent: task.agent, searchModels: task.searchModels, readinessSeconds, cachedReadinessSeconds, firstTrialSeconds, totalSeconds: (Date.now() - requestedAt) / 1000 }, null, 2));
+  if (process.env.HELIX_TEST_UNSUPERVISED === "1") { assert.ok(run.projection.cumulativeVariance >= .9); assert.ok(run.projection.dimensions > 0); console.log(`PCA retained ${run.projection.dimensions} components, ${(run.projection.cumulativeVariance * 100).toFixed(2)}% variance.`); }
   const artifacts = (await request(`/runs/${id}/artifacts`)).body;
   for (const name of ["final/helix-solution.zip", `final/source/${task.output === "ipynb" ? "solution.ipynb" : "train.py"}`, "final/model/model_manifest.json", "final/checksums.json", "final/requirements.lock"]) assert.ok(artifacts.some((file) => file.path === name), `Missing ${name}`);
   const manifest = JSON.parse(await readFile(join(root, "runs", id, "final", "experiment.json"), "utf8"));

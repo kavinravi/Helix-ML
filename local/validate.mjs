@@ -5,6 +5,18 @@ import { METRICS } from "./metrics.mjs";
 export function validateTask(body) {
   if (!body || !["codex", "claude"].includes(body.agent))
     throw new Error("Select a signed-in agent.");
+  const learning = body.learning ?? "supervised";
+  if (!["supervised", "clustering", "reduction"].includes(learning)) throw new Error("Choose supervised learning, clustering, or dimensionality reduction.");
+  const reductionMode = body.reductionMode ?? "dimensions";
+  if (!["dimensions", "variance"].includes(reductionMode)) throw new Error("Choose fixed dimensions or a PCA variance target.");
+  const dimensions = body.dimensions === undefined ? 2 : body.dimensions;
+  const varianceTarget = body.varianceTarget === undefined ? .95 : body.varianceTarget;
+  if (learning === "reduction" && reductionMode === "dimensions" && (!Number.isInteger(dimensions) || dimensions < 1 || dimensions > 50)) throw new Error("Choose between 1 and 50 output dimensions.");
+  if (learning === "reduction" && reductionMode === "variance" && (!Number.isFinite(varianceTarget) || varianceTarget <= 0 || varianceTarget > 1)) throw new Error("PCA cumulative variance must be greater than 0% and at most 100%.");
+  if (learning === "reduction" && reductionMode === "variance" && (body.searchModels || !["PCA", "sklearn.decomposition.PCA"].includes(body.model))) throw new Error("A cumulative variance target requires PCA.");
+  const excludedColumns = body.excludedColumns ?? [];
+  if (!Array.isArray(excludedColumns) || excludedColumns.length > 199 || excludedColumns.some(c => typeof c !== "string" || !c.trim() || c.length > 200) || new Set(excludedColumns.map(c => c.trim())).size !== excludedColumns.length)
+    throw new Error("Excluded columns must be unique column names.");
   if (
     typeof body.dataset !== "string" ||
     !body.dataset.trim() ||
@@ -13,7 +25,7 @@ export function validateTask(body) {
     throw new Error("Select a dataset.");
   if (
     typeof body.target !== "string" ||
-    !body.target.trim() ||
+    (learning === "supervised" && !body.target.trim()) ||
     body.target.length > 200
   )
     throw new Error("Enter the target column.");
@@ -25,6 +37,8 @@ export function validateTask(body) {
     throw new Error("Describe the prediction task.");
   if (!METRICS.includes(body.metric))
     throw new Error("Select a supported validation metric.");
+  const metrics = learning === "clustering" ? ["silhouette", "davies_bouldin"] : learning === "reduction" ? ["trustworthiness"] : ["accuracy", "auroc", "log_loss", "rmse", "mae"];
+  if (!metrics.includes(body.metric)) throw new Error("Choose a metric for the selected learning mode.");
   if (
     body.minutes !== null && (!Number.isInteger(body.minutes) ||
     body.minutes < 1 ||
@@ -91,6 +105,7 @@ export function validateTask(body) {
   ];
   if (!body.policy || keys.some((key) => typeof body.policy[key] !== "boolean"))
     throw new Error("Set all six model permissions.");
+  if (learning !== "supervised" && body.policy.ensemble) throw new Error("Ensembling is currently available for supervised learning only.");
   const splitStrategy = body.splitStrategy ?? "independent";
   const groupColumn = body.groupColumn ?? "";
   const timeColumn = body.timeColumn ?? "";
@@ -104,9 +119,10 @@ export function validateTask(body) {
   if (!Array.isArray(assetColumns) || assetColumns.length > 20 || assetColumns.some((c) => typeof c !== "string" || !c.trim() || c.length > 200) || new Set(assetColumns.map((c) => c.trim())).size !== assetColumns.length)
     throw new Error("Provide up to 20 unique asset column names.");
   return {
+    learning, dimensions, reductionMode, varianceTarget, excludedColumns: excludedColumns.map(c => c.trim()),
     agent: body.agent,
     dataset: body.dataset.trim(),
-    target: body.target.trim(),
+    target: learning === "supervised" ? body.target.trim() : "",
     objective: body.objective.trim(),
     metric: body.metric,
     minutes: body.minutes,

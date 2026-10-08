@@ -31,6 +31,21 @@ with TemporaryDirectory(prefix="helix-protocol-") as folder:
     write_csv(source / "train.csv", rows[0].keys(), rows)
     task = {"dataset": str(source), "target": "label", "metric": "accuracy", "validation": "cv", "folds": 5,
             "seeds": [42, 17], "splitStrategy": "independent", "assetColumns": []}
+    assert inspect_dataset({**task, "target": ""}, columns_only=True) == list(rows[0])
+    unsupervised = {**task, "learning": "reduction", "target": "", "metric": "trustworthiness", "dimensions": 2, "reductionMode": "dimensions", "varianceTarget": .95, "excludedColumns": ["label"], "testFraction": 0}
+    unsigned = root / "unsupervised"
+    info = prepare(unsupervised, unsigned)
+    assert info["taskType"] == "reduction" and info["target"] == "" and info["classes"] == []
+    truth = materialize(unsigned, root / "unlabeled", "final")
+    assert truth["baseline"] is None and truth["targets"] == [None] * len(rows)
+    with (root / "unlabeled" / "train.csv").open() as handle:
+        assert csv.DictReader(handle).fieldnames == ["x", "subject", "time"]
+    rejects(lambda: inspect_dataset({**unsupervised, "dimensions": 3}), "fewer")
+    rejects(lambda: inspect_dataset({**unsupervised, "excludedColumns": ["missing"]}), "Excluded")
+    reduction_policy = {**policy_task, "learning": "reduction", "model": "sklearn.decomposition.PCA"}
+    check_source("from sklearn.decomposition import PCA\nmodel=PCA(n_components=2, svd_solver='full')", reduction_policy)
+    rejects(lambda: check_source("from sklearn.cluster import KMeans\nmodel=KMeans()", reduction_policy), "PCA")
+
     for strategy in ("independent", "group", "time"):
         for method in ("cv", "holdout"):
             config = {**task, "validation": method, "splitStrategy": strategy, "groupColumn": "subject", "timeColumn": "time"}

@@ -1,5 +1,5 @@
 export type AgentId = "codex" | "claude";
-export type Metric = "accuracy" | "auroc" | "log_loss" | "rmse" | "mae";
+export type Metric = "accuracy" | "auroc" | "log_loss" | "rmse" | "mae" | "silhouette" | "davies_bouldin" | "trustworthiness";
 export type ExportFormat =
   | "native"
   | "joblib"
@@ -45,6 +45,11 @@ export interface Policy {
   ensemble: boolean;
 }
 export interface Task {
+  learning?: "supervised" | "clustering" | "reduction";
+  dimensions?: number;
+  reductionMode?: "dimensions" | "variance";
+  varianceTarget?: number;
+  excludedColumns?: string[];
   agent: AgentId;
   dataset: string;
   target: string;
@@ -77,7 +82,7 @@ export interface DatasetInfo {
   assetBytes: number;
   assets: Record<string, { bytes: number; sha256: string }>;
   schema: { name: string; type: string; missing: number }[];
-  taskType: "classification" | "regression";
+  taskType: "classification" | "regression" | "clustering" | "reduction";
   warnings: string[];
 }
 export interface Trial {
@@ -110,6 +115,7 @@ export interface FollowupMessage {
   childRunId?: string;
 }
 export interface Run {
+  projection?: { kind: "clustering" | "reduction"; axes: string[]; rows: number; scope: string; dimensions?: number; cumulativeVariance?: number; clusters?: { label: number; count: number }[]; points: { row: number; x: number; y: number; cluster?: number }[] };
   messages?: FollowupMessage[];
   followup?: { parentId: string; message: string; protocolHash: string };
   trainingHistory?: { step: number; loss?: number; accuracy?: number }[];

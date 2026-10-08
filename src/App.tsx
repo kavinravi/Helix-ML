@@ -3,9 +3,10 @@ import RunPlots from "./RunPlots";
 import BudgetFields from "./BudgetFields";
 import FollowupComposer, { type Followup } from "./FollowupComposer";
 import { api, localConnection, validateConnection } from "./api";
-import type { AgentId, Connection, DatasetInfo, ExportFormat, Metric, Policy, Provider, Run, Task, Tool } from "./types";
+import type { AgentId, Connection, ExportFormat, Policy, Provider, Run, Task, Tool } from "./types";
 
 const defaults: Omit<Task, "agent"> = {
+  learning: "supervised", dimensions: 2, reductionMode: "dimensions", varianceTarget: .95, excludedColumns: [],
   dataset: "", target: "", objective: "", metric: "accuracy", minutes: 30, trials: 12,
   searchModels: true, model: "", output: "py", exportModel: true, exportFormat: "native",
   validation: "cv", folds: 3, seeds: [42], testFraction: .2, holdoutFraction: .2,
@@ -56,10 +57,10 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
   const [task, setTask] = useState(defaults);
   const [seedText, setSeedText] = useState("42");
   const [assetText, setAssetText] = useState("");
+  const [excludeText, setExcludeText] = useState("");
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
-  const [inspection, setInspection] = useState<{ key: string; data: DatasetInfo } | null>(null);
   const [busy, setBusy] = useState("");
-  const [submission, setSubmission] = useState<{ task: Task; error?: string } | null>(null);
+  const [submission, setSubmission] = useState<{ task: Task; reason?: string; ready?: boolean; error?: string } | null>(null);
   const [sendingMessage, setSendingMessage] = useState<{ runId: string; message: string } | null>(null);
   const [connecting, setConnecting] = useState(!cloud);
   const [closed, setClosed] = useState(false);
@@ -91,8 +92,6 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
   const runtime = tools.find((value) => value.id === "runtime");
   const completedTrials = run?.trials.filter(trial => trial.phase !== "inheritance").length || 0;
   const running = !!run && ["running", "queued"].includes(run.status);
-  const inspectionKey = JSON.stringify([task, seedText, selected]);
-  const datasetInfo = inspection?.key === inspectionKey ? inspection.data : null;
   const readOnly = modal === "run-settings";
   const settings = readOnly && run ? { ...defaults, ...run.task } : task;
   const settingsVisible = modal === "settings" || readOnly;
@@ -195,7 +194,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
   const configuredTask = (): Task => {
     if (!selected) throw new Error("Choose Codex or Claude Code.");
     if (!task.dataset) throw new Error("Attach a dataset first.");
-    if (!task.target.trim()) throw new Error("Enter the target column in Settings.");
+
     if (!task.objective.trim()) throw new Error("Describe your experiment.");
     if (task.minutes === null && task.trials === null) throw new Error("Enable max time or max trials in Settings.");
     if (task.minutes !== null && (!Number.isInteger(task.minutes) || task.minutes < 1 || task.minutes > 1440)) throw new Error("Enter a time budget between 1 and 1440 minutes in Settings.");
@@ -203,14 +202,9 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
     if (!Number.isFinite(task.testFraction) || (task.validation === "holdout" && !Number.isFinite(task.holdoutFraction))) throw new Error("Enter the split percentages in Settings.");
     const seeds = seedText.split(",").map((value) => Number(value.trim()));
     if (seedText.split(",").some((value) => !/^\d+$/.test(value.trim())) || seeds.length > 5 || new Set(seeds).size !== seeds.length || seeds.some((value) => !Number.isSafeInteger(value) || value < 0 || value > 2 ** 32 - 1)) throw new Error("Use up to five unique 32-bit seeds in Settings.");
+    if (task.reductionMode === "dimensions" && (!Number.isInteger(task.dimensions) || task.dimensions! < 1 || task.dimensions! > 50)) throw new Error("Enter between 1 and 50 dimensions in Settings.");
+    if (task.reductionMode === "variance" && (!Number.isFinite(task.varianceTarget) || task.varianceTarget! <= 0 || task.varianceTarget! > 1)) throw new Error("Enter a PCA variance target greater than 0% and at most 100% in Settings.");
     return { ...task, model: task.searchModels ? "" : task.model, agent: selected, seeds };
-  };
-  const checkDataset = async () => {
-    if (!connection || !enabled) return;
-    setBusy("inspect"); setError("");
-    try { const data = await api<DatasetInfo>(connection, "/api/datasets/inspect", { method: "POST", body: JSON.stringify(configuredTask()), signal: AbortSignal.timeout(125_000) }); setInspection({ key: inspectionKey, data }); }
-    catch (e) { setError((e as Error).message); }
-    finally { setBusy(""); }
   };
   const start = async (event: FormEvent) => {
     event.preventDefault(); setError("");
@@ -232,14 +226,23 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
       setSubmission({ task: nextTask }); setRunId("pending"); update("objective", "");
       submitted = true;
       if (!window.matchMedia("(min-width: 1100px)").matches) setModal(null);
-      const value = await api<Run>(connection, "/api/runs", { method: "POST", body: JSON.stringify(nextTask), signal: AbortSignal.timeout(360_000) });
-      historyRevision.current++;
-      setRuns((prev) => [value, ...prev.filter((saved) => saved.id !== value.id)]);
-      setRunId(current => current === "pending" ? value.id : current); setSubmission(null);
+      const proposal = await api<{ task: Task; reason: string }>(connection, "/api/tasks/plan", { method: "POST", body: JSON.stringify(nextTask), signal: AbortSignal.timeout(180_000) });
+      setSubmission({ ...proposal, ready: true });
     } catch (e) {
       if (submitted) setSubmission((prev) => prev ? { ...prev, error: (e as Error).message } : null);
       else setError((e as Error).message);
     }
+    finally { setBusy(""); }
+  };
+  const confirmExperiment = async () => {
+    if (!connection || !submission?.ready || busy || active) return;
+    setBusy("start"); setSubmission(previous => previous ? { ...previous, error: undefined } : null);
+    try {
+      const value = await api<Run>(connection, "/api/runs", { method: "POST", body: JSON.stringify(submission.task), signal: AbortSignal.timeout(360_000) });
+      historyRevision.current++;
+      setRuns(previous => [value, ...previous.filter(saved => saved.id !== value.id)]);
+      setRunId(current => current === "pending" ? value.id : current); setSubmission(null);
+    } catch (error) { setSubmission(previous => previous ? { ...previous, error: (error as Error).message } : null); }
     finally { setBusy(""); }
   };
   const sendFollowup = async (value: Followup) => {
@@ -283,8 +286,8 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
       const response = await fetch("/examples/measurements.csv");
       if (!response.ok) throw new Error("Could not load the example dataset.");
       if (await upload([new File([await response.blob()], "measurements.csv", {type: "text/csv"})])) {
-        setTask(prev => ({...defaults, dataset: prev.dataset, target: "label", objective: "Predict short or long from length and width", metric: "accuracy", minutes: 15, trials: 3, searchModels: false, model: "sklearn.tree.DecisionTreeClassifier", validation: "holdout", seeds: [42], policy: {augmentation: false, regularization: false, features: false, tuning: false, pretrained: false, ensemble: false}}));
-        setSeedText("42"); setAssetText(""); setInspection(null); setModal(null);
+        setTask(prev => ({...defaults, dataset: prev.dataset, target: "label", objective: "Predict short or long from length and width using a DecisionTreeClassifier", metric: "accuracy", minutes: 15, trials: 3, searchModels: false, model: "sklearn.tree.DecisionTreeClassifier", validation: "holdout", seeds: [42], policy: {augmentation: false, regularization: false, features: false, tuning: false, pretrained: false, ensemble: false}}));
+        setSeedText("42"); setAssetText(""); setExcludeText(""); setModal(null);
       }
     } catch (e) { setError((e as Error).message); }
   };
@@ -298,10 +301,10 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) { setError((e as Error).message); }
   };
-  const newRun = () => { if (busy === "start" || busy === "delete") return; setSubmission(null); if (readOnly) setModal("settings"); setRunId(null); setTask((prev) => ({ ...prev, objective: "", dataset: "", target: "" })); setError(""); setSidebar(false); requestAnimationFrame(() => prompt.current?.focus()); };
-  const reuseRun = () => { if (!run) return; setSubmission(null); setTask({ ...defaults, ...run.task }); setSeedText(run.task.seeds.join(", ")); setAssetText((run.task.assetColumns || []).join(", ")); setSelected(run.task.agent); setRunId(null); setError(""); setModal("settings"); requestAnimationFrame(() => prompt.current?.focus()); };
-  const openRun = (value: Run) => { if (busy === "delete") return; setRunId(value.id); setTask({ ...defaults, ...value.task, objective: "" }); setSeedText(value.task.seeds.join(", ")); setAssetText((value.task.assetColumns || []).join(", ")); setSelected(value.task.agent); setError(""); setSidebar(false); };
-  const openSubmission = () => { if (!submission) return; setRunId("pending"); setTask({ ...submission.task, objective: "" }); setSeedText(submission.task.seeds.join(", ")); setAssetText(submission.task.assetColumns.join(", ")); setSelected(submission.task.agent); setError(""); setSidebar(false); };
+  const newRun = () => { if (busy === "start" || busy === "delete") return; setSubmission(null); if (readOnly) setModal("settings"); setRunId(null); setTask((prev) => ({ ...prev, objective: "", dataset: "", target: "", searchModels: true, model: "" })); setError(""); setSidebar(false); requestAnimationFrame(() => prompt.current?.focus()); };
+  const reuseRun = () => { if (!run) return; setSubmission(null); setTask({ ...defaults, ...run.task }); setSeedText(run.task.seeds.join(", ")); setAssetText((run.task.assetColumns || []).join(", ")); setExcludeText((run.task.excludedColumns || []).join(", ")); setSelected(run.task.agent); setRunId(null); setError(""); setModal("settings"); requestAnimationFrame(() => prompt.current?.focus()); };
+  const openRun = (value: Run) => { if (busy === "delete") return; setRunId(value.id); setTask({ ...defaults, ...value.task, objective: "" }); setSeedText(value.task.seeds.join(", ")); setAssetText((value.task.assetColumns || []).join(", ")); setExcludeText((value.task.excludedColumns || []).join(", ")); setSelected(value.task.agent); setError(""); setSidebar(false); };
+  const openSubmission = () => { if (!submission) return; setRunId("pending"); setTask({ ...submission.task, objective: "" }); setSeedText(submission.task.seeds.join(", ")); setAssetText(submission.task.assetColumns.join(", ")); setExcludeText((submission.task.excludedColumns || []).join(", ")); setSelected(submission.task.agent); setError(""); setSidebar(false); };
   const deleteRun = async (value: Run) => {
     if (!connection || busy || !window.confirm(`Delete "${value.task.objective}"?\n\nThis permanently removes this experiment and its results. Uploaded datasets are kept.`)) return;
     setBusy("delete"); setError("");
@@ -317,7 +320,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
   const editSubmission = () => {
     if (!submission) return;
     setTask(submission.task); setSelected(submission.task.agent); setSeedText(submission.task.seeds.join(", "));
-    setAssetText(submission.task.assetColumns.join(", ")); setRunId(null); setSubmission(null); setError(""); requestAnimationFrame(() => prompt.current?.focus());
+    setAssetText(submission.task.assetColumns.join(", ")); setExcludeText((submission.task.excludedColumns || []).join(", ")); setRunId(null); setSubmission(null); setError(""); requestAnimationFrame(() => prompt.current?.focus());
   };
   const quit = async () => {
     if (!connection?.desktop) return;
@@ -339,7 +342,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
       <button className="new-button" disabled={busy === "start" || busy === "delete"} onClick={newRun}><Icon name="plus" />New experiment</button>
       <div className="history-label">Experiments</div>
       <nav className="history" aria-label="Saved experiments">
-      {submission && <div className={`history-row ${pending ? "selected" : ""}`}><button className="history-item" aria-current={pending ? "page" : undefined} onClick={openSubmission} title={submission.task.objective}><span className={`run-dot ${submission.error ? "failed" : "queued"}`} /><span className="history-title">{submission.task.objective}</span><span className="history-state">{submission.error ? "Failed" : "Starting"}</span></button></div>}
+      {submission && <div className={`history-row ${pending ? "selected" : ""}`}><button className="history-item" aria-current={pending ? "page" : undefined} onClick={openSubmission} title={submission.task.objective}><span className={`run-dot ${submission.error ? "failed" : "queued"}`} /><span className="history-title">{submission.task.objective}</span><span className="history-state">{submission.error ? "Failed" : submission.ready && !busy ? "Review" : "Starting"}</span></button></div>}
       {runs.map((value) => <div key={value.id} className={`history-row ${runId === value.id ? "selected" : ""}`}>
         <button className="history-item" disabled={busy === "delete"} aria-current={runId === value.id ? "page" : undefined} onClick={() => openRun(value)} title={value.task.objective}><span className={`run-dot ${value.status}`} /><span className="history-title">{value.followup ? `↳ ${value.followup.message}` : value.task.objective}</span></button>
         {!["running", "queued"].includes(value.status) && !value.messages?.some(message => message.status === "pending") && <button className="history-delete" disabled={!!busy} aria-label={`Delete experiment: ${value.task.objective}`} title="Delete experiment" onClick={() => void deleteRun(value)}><Icon name="trash" size={15} /></button>}
@@ -356,11 +359,23 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
       </header>
       <section className={`conversation ${sentTask ? "has-run" : "is-empty"}`} aria-label="Experiment conversation">
         {pending ? <div className="thread">
-          <div className="experiment-heading"><span>NEW EXPERIMENT</span><span>{pending.error ? "Needs attention" : "Starting"}</span></div>
+          <div className="experiment-heading"><span>NEW EXPERIMENT</span><span>{pending.error ? "Needs attention" : pending.ready && !busy ? "Review" : "Preparing"}</span></div>
           <article className="user-message"><span className="brief-label">SENT <Icon name="check" size={12} /></span><p>{pending.task.objective}</p><span className="message-file"><Icon name="file" size={15} />{datasetName(pending.task.dataset)}</span></article>
           <article className="assistant-message"><div className="assistant-avatar"><HelixMark size={22} /></div><div className="assistant-content" role="status" aria-live="polite">
-            <div className="response-heading">{pending.error ? "Startup needs attention" : "Preparing your experiment"}{!pending.error && <span className="working-dot" />}</div>
-            {pending.error ? <><p className="inline-error">{pending.error}</p><button className="text-button" disabled={!!active || !!busy} onClick={editSubmission}>Edit message</button></> : <p className="submission-progress">{capability?.status === "checking" ? capability.detail : capability?.status === "verified" ? "Checking data and starting the run…" : "Checking data and getting your agent ready…"}</p>}
+            <div className="response-heading">{pending.ready && !busy ? "Review your experiment" : busy && pending.ready ? "Starting your experiment" : pending.error ? "A detail is missing" : "Reading your request"}{!!busy && <span className="working-dot" />}</div>
+            {pending.ready && <div className="experiment-preview">
+              <dl><div><dt>Task</dt><dd>{pending.task.learning === "clustering" ? "Clustering" : pending.task.learning === "reduction" ? "Dimensionality reduction" : ["rmse", "mae"].includes(pending.task.metric) ? "Regression" : "Classification"}</dd></div>
+              <div><dt>Metric</dt><dd>{pending.task.metric.replaceAll("_", " ")}</dd></div><div><dt>Model</dt><dd>{pending.task.searchModels ? "Agent chooses" : pending.task.model}</dd></div>
+              {pending.task.learning === "supervised" && <div><dt>Target</dt><dd>{pending.task.target}</dd></div>}
+              {pending.task.learning === "reduction" && <div><dt>Output</dt><dd>{pending.task.reductionMode === "variance" ? `PCA · ${((pending.task.varianceTarget ?? .95) * 100).toFixed(1)}% cumulative variance` : `${pending.task.dimensions} dimensions`}</dd></div>}
+              {!!pending.task.excludedColumns?.length && <div><dt>Excluded</dt><dd>{pending.task.excludedColumns.join(", ")}</dd></div>}
+              <div><dt>Budget</dt><dd>{[pending.task.minutes !== null && `${pending.task.minutes} min`, pending.task.trials !== null && `${pending.task.trials} trials`].filter(Boolean).join(" · ")}</dd></div></dl>
+              <p>{pending.reason}</p>
+            </div>}
+            {pending.error && <p className="inline-error" role="alert">{pending.error}</p>}
+            {!busy && <div className="run-actions">{pending.ready && <button className="primary" disabled={!!active} onClick={() => void confirmExperiment()}>Start experiment</button>}<button className="text-button" disabled={!!active} onClick={editSubmission}>Edit message & settings</button></div>}
+            {!!busy && <p className="submission-progress">{pending.ready ? capability?.status === "checking" ? capability.detail : "Checking data and starting the run…" : "Your agent is choosing the task, metric, and model. Training starts after you confirm."}</p>}
+
           </div></article>
         </div> : run ? <div className="thread" key={run.id}>
           <div className="experiment-heading"><span>EXPERIMENT / {run.id.slice(0, 8)}</span><span>{run.status}</span></div>
@@ -371,10 +386,11 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
             <div className="assistant-content">
               <div className="response-heading"><span>{run.status === "completed" ? "Experiment complete" : running ? run.progress ? `Trial ${run.progress.trial} · ${run.progress.stage}` : phases[run.phase] || run.phase : run.status === "paused" ? "Experiment paused" : run.status === "stopped" ? "Experiment stopped" : "Experiment failed"}</span>{running && <span className="working-dot" />}</div>
               <div className="run-meta">{duration(run.elapsed)}<span>·</span>{completedTrials} completed {completedTrials === 1 ? "trial" : "trials"}{running && run.progress?.stage === "Training" && <><span>·</span>{run.progress.completedFits}/{run.progress.totalFits} fits</>}<button onClick={() => setModal("run-settings")} aria-label="View experiment settings"><Icon name="settings" size={14} /></button></div>
-              {run.score != null && <div className="result-metrics"><div><span>Validation {run.task.metric}</span><strong>{score(run.score)}</strong></div>{run.testScore != null && <div><span>Test {run.task.metric}</span><strong>{score(run.testScore)}</strong></div>}</div>}
+              {run.score != null && <div className="result-metrics"><div><span>Validation {run.task.metric.replaceAll("_", " ")}</span><strong>{score(run.score)}</strong></div>{run.testScore != null && <div><span>Test {run.task.metric.replaceAll("_", " ")}</span><strong>{score(run.testScore)}</strong></div>}</div>}
               {run.baseline && <details className="baseline-comparison"><summary><span>{baselineGain != null && baselineGain > 0 ? "Beats baseline" : "Baseline not beaten"}</span><span>Baseline {score(run.baseline.score)}</span></summary><p>{run.baseline.name}, fitted on training labels for each split. Same validation rows and {run.task.metric} metric as the candidates.{run.testBaseline && ` Test baseline: ${score(run.testBaseline.score)}.`}</p></details>}
               {run.error && <div className="inline-error" role="alert">{run.error}</div>}
               <div className="run-actions">
+                {run.projection && artifacts.some(file => file.path === "final/representation.csv") && <button className="download-button" onClick={() => void download("final/representation.csv")}><Icon name="download" size={16} />Download {run.projection.kind === "clustering" ? "clusters" : "coordinates"}</button>}
                 {bundle && <button className="download-button" onClick={() => void download(bundle.path)}><Icon name="download" size={16} />Download solution</button>}
                 {running && <><button disabled={!!busy || run.phase === "finalizing"} onClick={() => void action("pause")}><Icon name="pause" size={15} />Pause</button><button disabled={!!busy} onClick={() => void action("stop")}><Icon name="stop" size={15} />Stop</button></>}
                 {["paused", "failed"].includes(run.status) && <><button disabled={!enabled || !!busy || !!active || checkingAgent} onClick={() => void action("resume")}><Icon name="play" size={15} />Resume</button><button disabled={!!busy} onClick={() => void action("stop")}>Stop</button></>}
@@ -395,21 +411,21 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
           </div>)}
           {sendingMessage?.runId === run.id && !run.messages?.some(message => message.status === "pending" && message.message === sendingMessage.message) && <article className="user-message"><span className="brief-label">SENDING</span><p>{sendingMessage.message}</p></article>}
           <div ref={threadEnd} />
-        </div> : <div className="welcome"><div className="specimen-mark"><span className="specimen-axis">Y</span><HelixMark size={52} /><span className="specimen-axis">X</span></div><div className="welcome-label">NEW EXPERIMENT</div><h1>What do you want<br /> to predict?</h1><button className="attach-start" onClick={() => chooseUpload()}><Icon name="plus" size={16} />Attach a dataset</button>{connection && <button className="text-button example-start" disabled={!!busy || !!active} onClick={() => void useExample()}>Try an example</button>}</div>}
+        </div> : <div className="welcome"><div className="specimen-mark"><span className="specimen-axis">Y</span><HelixMark size={52} /><span className="specimen-axis">X</span></div><div className="welcome-label">NEW EXPERIMENT</div><h1>What do you want<br /> to explore?</h1><button className="attach-start" onClick={() => chooseUpload()}><Icon name="plus" size={16} />Attach a dataset</button>{connection && <button className="text-button example-start" disabled={!!busy || !!active} onClick={() => void useExample()}>Try an example</button>}</div>}
       </section>
       <div className={`composer-dock ${sentTask ? "is-collapsed" : ""}`}>
         <div className="composer-width">
-          {submission && !pending ? <button className="active-notice" onClick={openSubmission}>{!submission.error && <span className="working-dot" />}{submission.error ? "An experiment needs attention" : "An experiment is starting"}<Icon name="chevron" size={14} /></button> : active && active.id !== runId && <button className="active-notice" onClick={() => openRun(active)}><span className="working-dot" />An experiment is running<Icon name="chevron" size={14} /></button>}
+          {submission && !pending ? <button className="active-notice" onClick={openSubmission}>{!submission.error && !!busy && <span className="working-dot" />}{submission.error ? "An experiment needs attention" : submission.ready && !busy ? "Review your experiment" : "An experiment is starting"}<Icon name="chevron" size={14} /></button> : active && active.id !== runId && <button className="active-notice" onClick={() => openRun(active)}><span className="working-dot" />An experiment is running<Icon name="chevron" size={14} /></button>}
           {(error || connectionError) && !modal && <div className="composer-error" role="alert">{error || connectionError}<button aria-label="Dismiss error" onClick={() => { setError(""); setConnectionError(""); }}><Icon name="close" size={14} /></button></div>}
           {run?.status === "completed" && <FollowupComposer key={run.id} disabled={!!busy || !!active || awaitingReply || checkingAgent} onSend={sendFollowup} />}
-          {sentTask && <div className="run-dock"><span><AgentMark agent={sentTask.agent} />{sentTask.agent === "claude" ? "Claude Code" : "Codex"}<span className="run-dock-status">{pending ? pending.error ? "Needs attention" : "Starting" : run?.status}</span></span><button onClick={() => setModal(run ? "run-settings" : "settings")}><Icon name="settings" size={16} />View setup</button></div>}
+          {sentTask && <div className="run-dock"><span><AgentMark agent={sentTask.agent} />{sentTask.agent === "claude" ? "Claude Code" : "Codex"}<span className="run-dock-status">{pending ? pending.error ? "Needs attention" : pending.ready && !busy ? "Review" : "Starting" : run?.status}</span></span><button disabled={!!pending && !!busy} onClick={() => pending ? editSubmission() : setModal("run-settings")}><Icon name="settings" size={16} />View setup</button></div>}
           <div hidden={!!sentTask}>
           <form ref={composer} className={`composer ${dragging ? "dragging" : ""}`} onSubmit={start}
             onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
             onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
             onDrop={(e) => { e.preventDefault(); setDragging(false); void upload(e.dataTransfer.files); }}>
             {task.dataset && <div className="attachment-row"><span className="dataset-chip" title={task.dataset}><Icon name="file" size={16} /><span>{datasetName(task.dataset)}</span><button type="button" aria-label="Remove dataset" disabled={!!active || !!busy} onClick={() => update("dataset", "")}><Icon name="close" size={13} /></button></span></div>}
-            <textarea ref={prompt} aria-label="Experiment message" rows={1} value={task.objective} disabled={!!active || !!busy || !!submission} placeholder={busy === "upload" ? "Uploading data…" : "Describe your experiment…"} maxLength={4000} onChange={(e) => update("objective", e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); composer.current?.requestSubmit(); } }} />
+            <textarea ref={prompt} aria-label="Experiment message" rows={1} value={task.objective} disabled={!!active || !!busy || !!submission} placeholder={busy === "upload" ? "Uploading data…" : "Describe your experiment, model, or metric…"} maxLength={4000} onChange={(e) => update("objective", e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); composer.current?.requestSubmit(); } }} />
             <div className="composer-toolbar">
               <details className="attach-menu" ref={attachMenu}><summary title="Attach data" aria-label="Attach data"><Icon name="plus" size={21} /></summary><div className="attach-options"><button type="button" disabled={!!active || !!busy} onClick={() => chooseUpload()}><Icon name="file" />Upload CSV</button><button type="button" disabled={!!active || !!busy} onClick={() => chooseUpload(true)}><Icon name="folder" />Upload folder</button>{!cloud && <button type="button" onClick={() => { attachMenu.current?.removeAttribute("open"); setModal("settings"); }}><Icon name="link" />Local path</button>}</div></details>
               <button className="settings-button" type="button" aria-label="Experiment settings" onClick={() => setModal("settings")}><Icon name="settings" size={17} /><span>Settings</span></button>
@@ -451,20 +467,25 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
           {cloud ? <button className="text-button" onClick={cloud.signOut}>Sign out</button> : <button className="text-button advanced-connection" onClick={() => { setError(""); setModal("connection"); }}>Advanced connection</button>}
           {connection?.desktop && <button className="text-button" disabled={!!busy} onClick={() => void quit()}>{active ? "Pause experiment & quit Helix" : "Quit Helix"}</button>}
         </div> : <form onSubmit={(e) => { e.preventDefault(); setModal(null); }}>
-          <div className="settings-body"><fieldset disabled={readOnly || !!active || !!busy}>
+          <div className="settings-body"><fieldset disabled={readOnly || !!active || !!busy || !!submission}>
             <section className="settings-section">
               <h3><span>01</span> Dataset <small className="field-tag">Required</small></h3>
-              {settings.dataset && <div className="setup-dataset"><Icon name="file" size={17} /><span title={settings.dataset}>{datasetName(settings.dataset)}</span>{datasetInfo && <span>{datasetInfo.rows.toLocaleString()} rows</span>}</div>}
+              {settings.dataset && <div className="setup-dataset"><Icon name="file" size={17} /><span title={settings.dataset}>{datasetName(settings.dataset)}</span></div>}
               {!readOnly && <div className="dataset-actions"><button type="button" onClick={() => chooseUpload()}><Icon name="plus" size={14} />{settings.dataset ? "Replace CSV" : "Choose CSV"}</button><button type="button" onClick={() => chooseUpload(true)}><Icon name="folder" size={14} />Choose folder</button></div>}
               {!cloud && <details className="settings-detail dataset-path"><summary>Use a local path</summary><label>CSV or folder path<input value={settings.dataset} onChange={(e) => update("dataset", e.target.value)} placeholder="/path/to/data.csv" /></label></details>}
-              <div className="field-grid"><label><span>Target column <small className="field-tag" aria-hidden="true">Required</small></span><input aria-required="true" value={settings.target} onChange={(e) => update("target", e.target.value)} placeholder="Enter column name" /></label><label>Metric<select value={settings.metric} onChange={(e) => update("metric", e.target.value as Metric)}><option value="accuracy">Accuracy</option><option value="auroc">AUROC</option><option value="log_loss">Log loss</option><option value="rmse">RMSE</option><option value="mae">MAE</option></select></label></div>
+              {readOnly && <p className="field-note">{settings.learning || "supervised"} · {settings.metric.replaceAll("_", " ")} · {settings.searchModels ? "Agent chooses the model" : settings.model}</p>}
+              <label><span>Target column <small className="field-tag">Optional override</small></span><input value={settings.target} onChange={e => update("target", e.target.value)} placeholder="Infer from your message" /></label>
+              <details className="settings-detail"><summary>Exclude columns <small className="field-tag">Optional</small></summary><label>Column names<input value={readOnly ? (settings.excludedColumns || []).join(", ") : excludeText} onChange={e => { setExcludeText(e.target.value); update("excludedColumns", e.target.value.split(",").map(s => s.trim()).filter(Boolean)); }} placeholder="id, label" /></label></details>
               <details className="settings-detail"><summary>Asset columns <small className="field-tag">Optional</small></summary><label>Columns containing file paths<input value={readOnly ? settings.assetColumns.join(", ") : assetText} onChange={(e) => { setAssetText(e.target.value); update("assetColumns", e.target.value.split(",").map((s) => s.trim()).filter(Boolean)); }} placeholder="image, audio, text_file" /></label></details>
             </section>
             <details className="settings-section settings-group">
-              <summary><h3><span>02</span> Models & strategies</h3><span className="group-value">{settings.searchModels ? "Auto" : "Custom"}</span></summary>
-              <div className="model-choice" role="radiogroup" aria-label="Model selection"><label><input type="radio" name="model-search" checked={settings.searchModels} onChange={() => setTask(previous => ({ ...previous, searchModels: true, model: "" }))} /><span>Auto search</span></label><label><input type="radio" name="model-search" checked={!settings.searchModels} onChange={() => update("searchModels", false)} /><span>Choose model</span></label></div>
-              {!settings.searchModels && <label><span>Model or family <small className="field-tag" aria-hidden="true">Required</small></span><input aria-required="true" value={settings.model} onChange={(e) => update("model", e.target.value)} placeholder="e.g. tree-based models only" /></label>}
-              <p className="field-note">Optional strategies</p><div className="strategy-grid">{strategies.map(([key, label]) => <label key={key} className="strategy-option"><input type="checkbox" aria-label={label} checked={settings.policy[key]} onChange={(e) => update("policy", { ...task.policy, [key]: e.target.checked })} /><span>{label}</span></label>)}</div>
+              <summary><h3><span>02</span> Strategies & dimensions</h3></summary>
+              <p className="field-note">Optional strategies</p><div className="strategy-grid">{strategies.filter(([key]) => !readOnly || settings.learning === "supervised" || key !== "ensemble").map(([key, label]) => <label key={key} className="strategy-option"><input type="checkbox" aria-label={label} checked={settings.policy[key]} onChange={(e) => update("policy", { ...task.policy, [key]: e.target.checked })} /><span>{label}</span></label>)}</div>
+              <details className="settings-detail"><summary>Dimensionality reduction</summary>
+                <label>Output constraint<select value={settings.reductionMode} onChange={e => update("reductionMode", e.target.value as Task["reductionMode"])}><option value="dimensions">Fixed dimensions</option><option value="variance">PCA cumulative variance</option></select></label>
+                {settings.reductionMode === "variance" ? <><label>Cumulative variance (%)<NumberField min="0.1" max="100" step="any" placeholder="e.g. 95" value={Number(((settings.varianceTarget ?? .95) * 100).toFixed(6))} onChange={value => update("varianceTarget", value / 100)} /></label><p className="field-note">Uses PCA on standardized features. Selects PCs to reach this target; extra strategies don't apply.</p></> : <label>Output dimensions<NumberField min="1" max="50" step="1" placeholder="e.g. 2" value={settings.dimensions ?? 2} onChange={value => update("dimensions", value)} /></label>}
+                <p className="field-note">Applies when your message requests dimensionality reduction. Numeric CSV features or embeddings.</p>
+              </details>
             </details>
             <section className="settings-section">
               <h3><span>03</span> Evaluation</h3>
@@ -488,8 +509,7 @@ export default function App({ cloud }: { cloud?: CloudAccount }) {
             </details>
           </fieldset>
           {(error || connectionError) && <div className="inline-error" role="alert">{error || connectionError}</div>}
-          {!readOnly && datasetInfo && <div className="inspection" role="status"><Icon name="check" size={16} />{datasetInfo.rows.toLocaleString()} rows · {datasetInfo.developmentRows.toLocaleString()} train · {datasetInfo.testRows.toLocaleString()} test</div>}
-          </div><footer className="modal-footer">{!readOnly && <button type="button" className="text-button" disabled={!enabled || !!busy || !!active} onClick={() => void checkDataset()}>{busy === "inspect" ? "Checking…" : "Check dataset"}</button>}<button className="primary">{readOnly ? "Close" : "Done"}</button></footer>
+          </div><footer className="modal-footer">{!readOnly && <button type="button" className="text-button" disabled={!enabled || !!busy || !!active || !!submission} onClick={() => composer.current?.requestSubmit()}>Review experiment</button>}<button className="primary">{readOnly ? "Close" : "Done"}</button></footer>
         </form>}
       </div>}
     </dialog>

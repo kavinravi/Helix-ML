@@ -20,7 +20,7 @@ import { scorePredictions, isBetter } from "./metrics.mjs";
 import { runProcess, expired, remainingTime } from "./process.mjs";
 import { agentStream, agentArguments, subscriptionEnvironment } from "./agents.mjs";
 import { availableTools, callTool } from "./tools.mjs";
-import { steps as iterateSteps, createRun, loadRuns, saveRun } from "./engine.mjs";
+import { steps as iterateSteps, createRun, loadRuns, saveRun, resolveProposal } from "./engine.mjs";
 import { aggregateScores } from "./evaluation.mjs";
 import { matchingPredictions } from "./export.mjs";
 import { readinessKey } from "./readiness.mjs";
@@ -32,6 +32,7 @@ test("runner validates configuration, isolates files, and enforces lifecycle bou
   let service;
   try {
     const task = {
+      learning: "supervised", dimensions: 2, reductionMode: "dimensions", varianceTarget: .95, excludedColumns: [],
       agent: "codex",
       dataset: "/data/train.csv",
       target: "label",
@@ -63,6 +64,27 @@ test("runner validates configuration, isolates files, and enforces lifecycle bou
       },
     };
     assert.deepEqual(validateTask(task), task);
+    const proposal = { learning: "clustering", metric: "silhouette", searchModels: true, model: "", target: "", excludedColumns: ["label"], reason: "Group numeric features by similarity." };
+    const clustered = resolveProposal({ ...task, target: "" }, proposal, ["x", "y", "label"]).task;
+    assert.equal(clustered.learning, "clustering"); assert.equal(clustered.target, ""); assert.equal(clustered.policy.ensemble, false);
+    assert.equal(resolveProposal({ ...task, target: "", reductionMode: "variance" }, { ...proposal, learning: "reduction", metric: "trustworthiness" }, ["x", "y", "label"]).task.model, "sklearn.decomposition.PCA");
+    assert.throws(() => resolveProposal(task, { ...proposal, clarification: "Which target?" }, ["label"]), /Which target/);
+    assert.throws(() => resolveProposal(task, { ...proposal, learning: "unknown" }, ["label"]), /supported learning/);
+    assert.throws(() => resolveProposal(task, { ...proposal, excludedColumns: ["absent"] }, ["label"]), /does not exist/);
+    const reduction = { ...clustered, learning: "reduction", metric: "trustworthiness" };
+    for (const dimensions of [0, null, NaN, 1.5, 51]) assert.throws(() => validateTask({ ...reduction, dimensions }), /dimensions/);
+    const variance = { ...reduction, reductionMode: "variance", model: "sklearn.decomposition.PCA", searchModels: false };
+    assert.equal(validateTask({ ...variance, varianceTarget: 1 }).varianceTarget, 1);
+    for (const varianceTarget of [0, null, NaN, -1, 1.01]) assert.throws(() => validateTask({ ...variance, varianceTarget }), /cumulative variance/);
+    assert.throws(() => validateTask({ ...variance, model: "umap.UMAP" }), /requires PCA/);
+    assert.throws(() => validateTask({ ...clustered, metric: "accuracy" }), /metric/);
+    assert.throws(() => validateTask({ ...clustered, policy: { ...clustered.policy, ensemble: true } }), /Ensembling/);
+    assert.throws(() => validateTask({ ...clustered, excludedColumns: ["label", "label"] }), /unique/);
+    assert.equal(isBetter("silhouette", .6, .5), true);
+    assert.equal(isBetter("davies_bouldin", .5, .6), true);
+    assert.equal(isBetter("trustworthiness", .9, .8), true);
+    assert.deepEqual(availableTools(task, "setup").map(tool => tool.name), ["read_source", "write_source"]);
+
     assert.equal(validateTask({ ...task, minutes: null }).minutes, null);
     assert.equal(validateTask({ ...task, trials: null }).trials, null);
     assert.throws(() => validateTask({ ...task, minutes: null, trials: null }), /at least one/);

@@ -70,7 +70,7 @@ export async function container(context, command, { mounts = [], network = false
       "--security-opt=no-new-privileges", "--pids-limit=128", process.env.HELIX_HOSTED_WORKER ? "--memory=1200m" : "--memory=3g", "--cpus=2",
       "--ulimit", "fsize=268435456:268435456", "--tmpfs=/tmp:rw,size=512m",
       "--user", context.user,
-      "-e", "PYTHONPATH=/code:/packages", "-e", "PYTHONDONTWRITEBYTECODE=1",
+      "-e", "PYTHONPATH=/code:/packages", "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "NUMBA_CACHE_DIR=/tmp/numba",
       ...mounts.flatMap(([source, target, mode = "ro"]) => ["--mount", `type=bind,source=${source},target=${target}${mode === "ro" ? ",readonly" : ""}`]),
       context.image || IMAGE, ...(seconds === null ? [] : ["timeout", "--kill-after=5", String(seconds)]), ...command,
     ], { timeout: seconds === null ? null : (seconds + 5) * 1000, signal: combined, onLine });

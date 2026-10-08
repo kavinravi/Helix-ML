@@ -9,6 +9,7 @@ const packages = [
   "numpy",
   "pandas",
   "scikit-learn",
+  "umap-learn",
   "scipy",
   "pillow",
   "torch",
@@ -55,7 +56,7 @@ export const tools = [
   {
     name: "dataset_info",
     description:
-      "Read the fixed training/validation manifest and class order. Validation targets are excluded.",
+      "Read the fixed training/validation manifest and class order. Validation targets are excluded. Unsupervised tasks have no target; their output constraints are included.",
     inputSchema: objectSchema({}),
   },
   {
@@ -114,6 +115,7 @@ export const tools = [
 
 export function availableTools(task, mode) {
   return tools.filter((tool) =>
+    (mode !== "setup" || ["read_source", "write_source"].includes(tool.name)) &&
     (mode !== "discussion" || ["read_source", "dataset_info", "previous_experiments", "list_artifacts"].includes(tool.name)) &&
     (tool.name !== "search_models" || (task.searchModels && task.policy.pretrained)) &&
     (tool.name !== "cache_model" || task.policy.pretrained)).map((tool) => ({
@@ -268,8 +270,21 @@ export async function callTool(name, args, context) {
       const extra = ["torch", "torchvision", "torchaudio"].includes(args.name)
         ? ["--index-url", "https://download.pytorch.org/whl/cpu"]
         : [];
-      return (await container(context, ["pip", "install", "--no-cache-dir", "--target", "/packages", `${args.name}==${args.version}`, ...extra], {
-        network: true, mounts: [[context.packages, "/packages", "rw"]], writable: context.packages,
+      // Resolve against the runtime first: --target alone reinstalls every dependency,
+      // wasting the bounded /tmp filesystem even when NumPy/SciPy are already present.
+      const installer = `import json, subprocess, sys
+pip = [sys.executable, '-m', 'pip', 'install', '--no-cache-dir']
+report = '/tmp/install-plan.json'
+subprocess.run(pip + ['--dry-run', '--report', report] + sys.argv[1:], check=True)
+with open(report) as f: plan = json.load(f)['install']
+requirements = [entry['metadata']['name'] + '==' + entry['metadata']['version'] for entry in plan]
+if requirements:
+    subprocess.run(pip + ['--no-deps', '--upgrade', '--target', '/packages'] + requirements + sys.argv[2:], check=True)
+else:
+    print('Requested package and its dependencies are already installed.')
+`;
+      return (await container(context, ["python", "-c", installer, `${args.name}==${args.version}`, ...extra], {
+        signal: context.signal, network: true, mounts: [[context.packages, "/packages", "rw"]], writable: context.packages,
       })).output.slice(-6000);
     }
     case "cache_model": {

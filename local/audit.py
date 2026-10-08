@@ -31,8 +31,13 @@ def check_source(source, task):
     policy = task["policy"]
     requested = task.get("model", "").strip()
     exact = re.fullmatch(r"(?:sklearn\.[A-Za-z_]+\.)?([A-Z][A-Za-z0-9]+(?:Classifier|Regressor|Regression))", requested)
+    reduction = task.get("learning") == "reduction"
+    if task.get("learning") in {"clustering", "reduction"}:
+        exact = re.fullmatch(r"(?:sklearn\.[A-Za-z_]+\.|umap\.)?([A-Z][A-Za-z0-9]+)", requested)
     tree_only = bool(re.fullmatch(r"tree(?:[- ]based)? models?(?: only)?", requested, re.I))
     estimators = ("sklearn.tree.", "sklearn.ensemble.", "sklearn.linear_model.", "sklearn.svm.", "sklearn.neighbors.", "sklearn.naive_bayes.", "sklearn.neural_network.", "xgboost.", "lightgbm.", "catboost.")
+    if task.get("learning") in {"clustering", "reduction"}:
+        estimators += ("sklearn.cluster.", "sklearn.mixture.", "sklearn.decomposition.", "umap.")
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -55,7 +60,7 @@ def check_source(source, task):
             reason = "Pretrained weights are forbidden"
         if not policy["ensemble"] and leaf.startswith(("Voting", "Stacking")):
             reason = "Combining models is forbidden"
-        if not policy["features"] and leaf in {"PCA", "KernelPCA", "SelectKBest", "SelectPercentile", "SelectFromModel", "PolynomialFeatures", "RFE", "RFECV"}:
+        if not policy["features"] and (leaf in {"SelectKBest", "SelectPercentile", "SelectFromModel", "PolynomialFeatures", "RFE", "RFECV"} or (leaf in {"PCA", "KernelPCA"} and not reduction)):
             reason = "Derived features and feature selection are forbidden"
         if not policy["tuning"] and (leaf.endswith("SearchCV") or leaf in {"create_study", "fmin"}):
             reason = "Hyperparameter search is forbidden"

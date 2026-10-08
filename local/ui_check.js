@@ -18,6 +18,7 @@ async page => {
     if(path==='/account/workspace') return json({ready:true});
     if(path==='/api/providers') { if(url.searchParams.has('refresh')) refreshed=signedIn; return json(providers()); }
     if(path==='/api/tools') return json([{id:'runtime',name:'Training',status:'Ready',description:'CPU ready'}]);
+    if(path==='/api/tasks/plan') return json({task:{...route.request().postDataJSON(),searchModels:true,model:''},reason:'Use classification.'});
     if(path==='/api/runs') {
       if(route.request().method()==='POST') { submitted=route.request().postDataJSON(); return json({error:'Intentional test stop after send'},400); }
       return json(savedRuns);
@@ -36,21 +37,11 @@ async page => {
   });
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
   await page.reload();await page.getByRole('button',{name:'Cloud',exact:true}).waitFor();
-  const target=page.getByRole('textbox',{name:'Target column',exact:true});
+  const target=page.getByRole('textbox',{name:'Target column Optional override',exact:true});
   check(await target.inputValue()==='','A new experiment must not default to a target column');
-  check(await target.getAttribute('placeholder')==='Enter column name','The target hint must not look like a filled column name');
+  check(await target.getAttribute('placeholder')==='Infer from your message','The target hint must not look like a filled column name');
   check(await target.evaluate(el=>el.matches(':placeholder-shown') && getComputedStyle(el,'::placeholder').color!==getComputedStyle(el).color),'An empty target must show a grey placeholder');
-  check(await target.getAttribute('aria-required')==='true','Target must be marked required');
-  await page.locator('summary').filter({hasText:'Models & strategies'}).click();
-  const model=page.getByRole('textbox',{name:'Model or family',exact:true});
-  check(await model.count()===0 && await page.getByRole('textbox',{name:'Model constraints',exact:true}).count()===0,'Auto search must not show a model input');
-  await page.getByRole('radio',{name:'Choose model',exact:true}).check();
-  await model.fill('sklearn.tree.DecisionTreeClassifier');
-  await page.getByRole('radio',{name:'Auto search',exact:true}).check();
-  check(await model.count()===0,'Switching to auto search must remove the model input');
-  await page.getByRole('radio',{name:'Choose model',exact:true}).check();
-  check(await model.inputValue()==='','Auto search must clear the previous model constraint');
-  await page.getByRole('radio',{name:'Auto search',exact:true}).check();
+  check(await page.getByRole('textbox',{name:'Model or family',exact:true}).count()===0,'Model selection belongs in the prompt');
   const minutes=page.getByRole('spinbutton',{name:'Minutes',exact:true});
   check(await minutes.inputValue()==='30','Expected the default 30 minutes');
   await minutes.focus();await minutes.press('End');await minutes.press('Backspace');await minutes.press('Backspace');
@@ -79,17 +70,16 @@ async page => {
   await page.getByRole('textbox',{name:'Experiment message',exact:true}).waitFor();
   await page.getByLabel('Choose coding agent',{exact:true}).click();await page.getByRole('radio',{name:'OpenAI Codex',exact:true}).check();
   await page.getByRole('dialog',{name:'Connect Codex',exact:true}).waitFor({state:'hidden'});
-  check(await page.getByRole('textbox',{name:'Experiment message',exact:true}).inputValue()==='Predict short or long from length and width','Login must preserve the draft');
+  check(await page.getByRole('textbox',{name:'Experiment message',exact:true}).inputValue()==='Predict short or long from length and width using a DecisionTreeClassifier','Login must preserve the draft');
   check(await page.locator('.composer input[aria-label="Target column"]').count()===0,'The composer must not duplicate the target setting');
   await page.getByRole('button',{name:'Experiment settings',exact:true}).click();await minutes.fill('5');
   check(await target.count()===1,'Settings must contain the only target-column input');
   check(await target.inputValue()==='label','Try an example must set a real target value');
-  await page.locator('summary').filter({hasText:'Models & strategies'}).click();
-  await page.getByRole('radio',{name:'Auto search',exact:true}).check();
   await page.getByRole('checkbox',{name:'Max trials',exact:true}).uncheck();
   check(await trials.isDisabled(),'Time-only runs disable the trial count');
   await target.fill('outcome');await page.getByRole('button',{name:'Done',exact:true}).click();
   await page.getByRole('button',{name:'Run experiment',exact:true}).click();
+  await page.getByRole('button',{name:'Start experiment',exact:true}).click();
   await page.getByText('Intentional test stop after send',{exact:true}).waitFor();
   check(submitted?.target==='outcome','Send must use the target column entered in Settings');
   check(submitted?.searchModels===true && submitted.model==='','Auto search must not submit the example model as a hidden constraint');
@@ -123,7 +113,7 @@ async page => {
   failDelete=false;await remove.focus();page.once('dialog',dialog=>dialog.accept());await remove.press('Enter');
   await past.waitFor({state:'detached'});
   await page.getByText('Intentional test stop after send',{exact:true}).waitFor();
-  check(await page.getByRole('button',{name:'Edit message',exact:true}).isVisible(),'Deleting an older experiment must preserve a separate failed submission');
+  check(await page.getByRole('button',{name:'Edit message & settings',exact:true}).isVisible(),'Deleting an older experiment must preserve a separate failed submission');
   check(await page.getByRole('button',{name:'running experiment',exact:true}).count()===1,'Deleting history must preserve other experiments');
   await page.reload();await page.getByRole('button',{name:'running experiment',exact:true}).waitFor();
   check(await past.count()===0,'Deleted history must stay gone after refresh');
