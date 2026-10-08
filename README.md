@@ -97,7 +97,13 @@ Independent, grouped, and chronological splits are available. Repeated independe
 
 Supervised results include a simple baseline measured on the same rows. Accuracy uses the most frequent training class, probability metrics use training class frequencies, RMSE uses the training mean, and MAE uses the training median. Each fold fits its baseline from its own training labels. Baselines also appear in the downloaded experiment record. A model can complete successfully without beating its baseline; the interface reports that outcome.
 
-Local models train with two CPU cores, 3 GB RAM, no network, read-only inputs, and bounded outputs. Preparation limits are 128 MiB CSV, 100,000 rows, 200 columns, 1,000 classes, and 2 GiB referenced assets. One experiment runs at a time per runner. Pause interrupts the current candidate; resume restarts that candidate using the remaining budget. Final evaluation cannot be paused or retried after interruption, to preserve the one-test rule. Stop retains completed trials and artifacts.
+Models train with two CPU cores, no network, read-only inputs, and bounded outputs. Each fit has 3 GiB RAM locally or 1,200 MiB on the hosted worker. There is no fixed row cap. CSV inspection and fold creation stream rows; duplicate detection uses a temporary SQLite database on disk. Split indices and compact label/group metadata stay in memory and are checked against a 512 MiB preparation budget, accounting for row count, folds, and seeds. The existing storage limits are 2 GB per uploaded file/CSV and 2 GiB of referenced assets; schemas allow up to 200 columns and 1,000 classes.
+
+Before training, Helix estimates memory from feature width, text size, prediction dimensions, and known model buffers. Dense pairwise models, UMAP neighbor graphs, and Elkan KMeans bounds receive separate estimates. Chunked input with incremental fitting reduces the estimated data buffers. These checks are conservative estimates, not guarantees for arbitrary generated code; the runtime enforces the actual RAM limit and reports an out-of-memory failure without losing completed trials. Some models and the trusted unsupervised scorer still need dense arrays. Helix does not silently subsample the training data.
+
+Operators can set `HELIX_PREP_MEMORY_MB` and `HELIX_TRAIN_MEMORY_MB` (integer MiB, 128–65,536) when provisioning a worker with different memory. The latter controls both the fit estimate and Docker's memory limit; allocate enough host RAM for the agent and runner too. A synthetic one-million-row, two-feature classification check completed all three CPU folds under the hosted fit limit. Preparation plus one materialized fold peaked at 216 MiB in the Linux check; memory and timing depend on the dataset and machine.
+
+One experiment runs at a time per runner. Pause interrupts the current candidate; resume restarts that candidate using the remaining budget. Final evaluation cannot be paused or retried after interruption, to preserve the one-test rule. Stop retains completed trials and artifacts.
 
 ## Exports and limits
 
@@ -118,6 +124,7 @@ npm test                 # API boundaries, preparation, metrics and policy check
 npm run test:hosted      # Account/session persistence, CSRF, OAuth state/PKCE, explicit account linking and user separation
 npm run test:unsupervised # Real clustering/PCA fits, variance targets, coordinates, and export reload
 npm run test:runtime     # Real CPU fits, notebooks, reloads and cancellation
+npm run test:scaling     # Million-row preparation/fits, large CSVs, width/model/fold memory checks
 npm run test:agents      # Native MCP write, real training, prediction and reload
 npm run test:mvp         # Full Claude experiment, pause/restart, export and download
 npm run test:acceptance  # Real UCI data, model search, refinement and portable exports

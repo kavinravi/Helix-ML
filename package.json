@@ -19,6 +19,7 @@
     "setup": "node local/setup.mjs",
     "test": "node --test local/check.test.mjs local/followup.test.mjs",
     "test:runtime": "node local/runtime_check.mjs",
+    "test:scaling": "node local/scaling_check.mjs",
     "test:unsupervised": "node local/unsupervised_check.mjs",
     "test:agents": "node local/agent_check.mjs",
     "test:mvp": "node local/mvp_check.mjs",

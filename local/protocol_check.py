@@ -46,12 +46,22 @@ with TemporaryDirectory(prefix="helix-protocol-") as folder:
     check_source("from sklearn.decomposition import PCA\nmodel=PCA(n_components=2, svd_solver='full')", reduction_policy)
     rejects(lambda: check_source("from sklearn.cluster import KMeans\nmodel=KMeans()", reduction_policy), "PCA")
 
+    # Recorded before streaming preparation: existing runs must keep identical partitions and hashes.
+    previous_hashes = {
+        "independent-cv": "81726eb0b84b0fdf002d6ef2a99143ffdc4a2b19b756f4fbfebcc22df4a2c103",
+        "independent-holdout": "bfa8c3410aa5b6240d47fb9169d980217ef775bc737a8233b64cb3f540f580a9",
+        "group-cv": "82aca09ecc19ec36b1b38a72d96842338ad12203fb325bb31f95c93b49fa477e",
+        "group-holdout": "0f55aa0017cb7088d281ab026508bc85c3ac98efa6183938716b4ba28ec9efda",
+        "time-cv": "a1667d8e3efcee6dcea2113ede1ae7c04bd6303b85dc1b6635a53c3421cf3f13",
+        "time-holdout": "df379c0ea4ff9105dad0211cb9ad37b3aa64e1ca466e92fe5d52afa47507d9e0",
+    }
     for strategy in ("independent", "group", "time"):
         for method in ("cv", "holdout"):
             config = {**task, "validation": method, "splitStrategy": strategy, "groupColumn": "subject", "timeColumn": "time"}
             destination = root / f"{strategy}-{method}"
             manifest = prepare(config, destination)
             protocol = json.loads((destination / "protocol.json").read_text())
+            assert protocol["sha256"] == previous_hashes[destination.name]
             assert prepare(config, destination) == manifest
             refit_data = root / (destination.name + "-refit")
             materialize(destination, refit_data, "refit")
@@ -104,9 +114,22 @@ with TemporaryDirectory(prefix="helix-protocol-") as folder:
         rejects(lambda: make_protocol({**config, "holdoutFraction": 0}, records, manifest), "Validation split")
     _, records, manifest = inspect_dataset({**task, "metric": "rmse"})
     assert make_protocol({**task, "metric": "rmse"}, records, manifest)["test"]
+    for metric in ("rmse", "mae"):
+        destination = root / metric
+        prepare({**task, "metric": metric}, destination)
+        fold = json.loads((destination / "protocol.json").read_text())["evaluations"][0]
+        measured = materialize(destination, root / (metric + "-fold"), fold["id"])
+        assert measured["targets"] == [rows[i]["label"] for i in fold["validation"]]
+        assert measured["baseline"] == reference_prediction(metric, [rows[i]["label"] for i in fold["train"]], [])
     rejects(lambda: inspect_dataset({**task, "target": "absent"}), "absent")
     write_csv(source / "train.csv", rows[0].keys(), rows + [rows[0]])
     rejects(lambda: inspect_dataset(task), "repeated")
+    grouped = {**task, "splitStrategy": "group", "groupColumn": "subject"}
+    assert inspect_dataset(grouped)[2]["duplicateRows"] == 1
+    write_csv(source / "train.csv", rows[0].keys(), rows + [{**rows[0], "subject": "different"}])
+    rejects(lambda: inspect_dataset(grouped), "different groups")
+    (source / "train.csv").write_text("x,label\n1\n")
+    rejects(lambda: inspect_dataset(task), "same number of fields")
     rows[0]["label"] = ""
     write_csv(source / "train.csv", rows[0].keys(), rows)
     rejects(lambda: inspect_dataset(task), "target")

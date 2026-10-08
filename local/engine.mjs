@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { invokeAgent } from "./agents.mjs";
 import { runProcess, expired, remainingTime } from "./process.mjs";
-import { IMAGE, cleanupContainers, container } from "./runtime.mjs";
+import { IMAGE, cleanupContainers, container, runtimeMemoryMb } from "./runtime.mjs";
 import { prepareEvaluation, evaluateCandidate, evaluateFinal, sourceFingerprint } from "./evaluation.mjs";
 import { isBetter, higherIsBetter } from "./metrics.mjs";
 import { makeNotebook, finishBundle } from "./export.mjs";
@@ -191,7 +191,7 @@ Output a JSON array in validation row order. ${outputContract}
 ${mode === "supervised" ? "" : "Unsupervised scores use a fixed feature space: median imputation and StandardScaler fitted ONLY on training rows. Silhouette maximizes, Davies-Bouldin minimizes, and trustworthiness maximizes neighbor preservation. Scores use the same seeded sample of up to 1,000 evaluation rows for all candidates. Scores measure geometry, not semantic correctness. Do not change the evaluation metric or invent accuracy labels."}
 Resolve media paths relative to the training CSV directory. Use only declared asset columns. Code is mounted read-only at /code and outputs belong under /work. Imports of helper modules are supported. Training has no network. Use approved package/model cache tools, with exact versions/revisions, only when permitted. Respect config.exportModel and config.exportFormat. Do not serialize models when exportModel is false.
 If config.exportModel is true, save the complete fitted estimator AND preprocessing under Path(args.output).parent / 'model'. Write model/model_manifest.json with format (joblib, pickle, pytorch, torchscript, keras, savedmodel, or onnx), and files (relative paths to all serialized files). Native means choose a compatible format; never change an explicitly requested format. Also write predict.py accepting --input, --metadata, --config, --model-dir, --models, --output. It must reload the exported model in a fresh process and produce the identical prediction JSON without fitting; training CSV is unavailable during reload. Define serialized custom classes in importable helper modules, never __main__. The runner tests export/reload on EVERY validation fold before final selection. If exportModel is false, predict.py is optional.
-Do not run training yourself or invent scores. Keep fits feasible for 2 CPU cores and 3 GB RAM. Use official framework construction and evaluation practices. Never access harness files, original datasets, evaluator files, other trials, or user files.
+Do not run training yourself or invent scores. Keep fits feasible for 2 CPU cores and ${runtimeMemoryMb()} MiB RAM. dataset_info.resources records the row count, feature width, memory estimates and memory limit. These are working-set estimates, not guarantees. For large data use chunked pandas.read_csv with chunksize at most 10000 and partial_fit where supported; never materialize CSV rows as a list of dictionaries or build dense one-hot/pairwise matrices that exceed the limit. Models, preprocessing, prediction buffers and export/reload all share the same limit. Do not silently downsample training data to fit; ask for an explicit change if no permitted method fits. Use official framework construction and evaluation practices. Never access harness files, original datasets, evaluator files, other trials, or user files.
 For iterative models, optionally write training_history.json beside predictions.json: an array of at most 500 objects with step (increasing integer), loss (finite training loss, optional) and accuracy (training accuracy in [0,1], optional). Record real measurements from training rows only. Do not synthesize curves or score the unlabeled validation inputs. Omit this file for models without a measured training history.
 Write plan.json with string fields component, change, rationale, modelFamily, and a strategies object containing all six boolean permissions describing techniques actually used. Preserve the restriction through every change. Use the Helix tools for dataset schema, bounded research and prior measured results.`;
 }
@@ -241,12 +241,12 @@ export async function execute(root, run, signal) {
     const metadata = await prepareEvaluation(root, run, { signal, deadline });
     const image = run.environment?.image || (await runProcess("docker", ["image", "inspect", IMAGE, "--format", "{{.Id}}"])).output.trim();
     baseContext.image = image;
-    run.environment = { image, platform: process.platform, architecture: process.arch, node: process.version };
+    run.environment = { image, platform: process.platform, architecture: process.arch, node: process.version, memoryMiB: runtimeMemoryMb() };
     if (run.followup && metadata.protocolHash !== run.followup.protocolHash)
       throw new Error("The dataset or evaluation split changed since the original run. Start a new experiment.");
     run.protocolHash = metadata.protocolHash;
     // The agent gets schema and development class counts, never rows or target files.
-    const publicMetadata = Object.fromEntries(["target", "metric", "taskType", "dimensions", "reductionMode", "varianceTarget", "features", "classes", "assetColumns", "assetTypes", "classCounts", "fitsPerTrial"].map((key) => [key, metadata[key]]));
+    const publicMetadata = Object.fromEntries(["target", "metric", "taskType", "dimensions", "reductionMode", "varianceTarget", "features", "classes", "assetColumns", "assetTypes", "classCounts", "fitsPerTrial", "resources"].map((key) => [key, metadata[key]]));
     publicMetadata.schema = metadata.developmentSchema;
     publicMetadata.installedPackages = JSON.parse((await container(baseContext, ["python", "-c", "import json, importlib.metadata as m; print(json.dumps({d.metadata['Name']: d.version for d in m.distributions() if d.metadata['Name']}))"], { signal })).output);
     await writeFile(join(data, "manifest.json"), JSON.stringify(publicMetadata));

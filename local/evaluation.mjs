@@ -66,6 +66,9 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
   const metadata = await json(join(evaluation, "manifest.json"));
   const source = await sourceFingerprint(workspace);
   if (!source.files.includes("train.py")) throw new Error("The candidate must provide train.py.");
+  const capacity = await runProcess(python(), [preparer, "--evaluation", evaluation, "--resources", workspace], { signal, timeout: remainingTime(deadline) });
+  const resources = JSON.parse(capacity.output);
+  onEvent("system", `Memory estimate: ${Math.ceil(Math.max(resources.estimatedFitBytes, resources.estimatedScoringBytes) / 1024 ** 2)} MiB of ${resources.limitBytes / 1024 ** 2} MiB available per fit.`);
   const context = {
     root, runId: run.id, deadline, image: image || IMAGE,
     user: typeof process.getuid === "function" ? `${process.getuid()}:${process.getgid()}` : "65534:65534",

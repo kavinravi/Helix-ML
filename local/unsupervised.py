@@ -23,8 +23,8 @@ def evaluate(data, predictions, seed, unscored=False):
 
     def matrix(name):
         with (data / name).open() as handle:
-            return np.asarray([[float(row[key]) if row[key].strip() else np.nan for key in features]
-                               for row in csv.DictReader(handle)], dtype=float)
+            values = (float(row[key]) if row[key].strip() else np.nan for row in csv.DictReader(handle) for key in features)
+            return np.fromiter(values, dtype=float).reshape(-1, len(features))
 
     pipeline = make_pipeline(SimpleImputer(strategy="median", keep_empty_features=True), StandardScaler())
     train = pipeline.fit_transform(matrix("train.csv"))

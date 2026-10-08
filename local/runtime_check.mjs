@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { prepareEvaluation, evaluateCandidate, evaluateFinal, aggregateScores } from "./evaluation.mjs";
-import { cleanupContainers, container, IMAGE } from "./runtime.mjs";
+import { cleanupContainers, container, IMAGE, runtimeMemoryMb } from "./runtime.mjs";
 import { runProcess } from "./process.mjs";
 import { makeNotebook, finishBundle } from "./export.mjs";
 import { scorePredictions } from "./metrics.mjs";
@@ -194,9 +194,20 @@ for epoch in range(5):
   try {
     await assert.rejects(container({ ...context, deadline: null }, ["python", "-c", "import time; time.sleep(60)"], { signal: abort.signal }), /Interrupted/);
   } finally { clearTimeout(timer); }
+  const previousMemory = process.env.HELIX_TRAIN_MEMORY_MB;
+  try {
+    process.env.HELIX_TRAIN_MEMORY_MB = "invalid";
+    assert.throws(runtimeMemoryMb, /integer from 128/);
+    process.env.HELIX_TRAIN_MEMORY_MB = "128";
+    assert.equal(runtimeMemoryMb(), 128);
+    await assert.rejects(container({ ...context, deadline: null }, ["python", "-c", "x = bytearray(512 * 1024**2)" ]), /128 MiB RAM limit/);
+  } finally {
+    if (previousMemory === undefined) delete process.env.HELIX_TRAIN_MEMORY_MB;
+    else process.env.HELIX_TRAIN_MEMORY_MB = previousMemory;
+  }
   const remaining = await runProcess("docker", ["ps", "-aq", "--filter", `label=helix.run=${context.runId}`]);
   assert.equal(remaining.output.trim(), "");
-  console.log("Metrics match scikit-learn; final test reused; changed source and failed candidates rejected; interruption cleaned up.");
+  console.log("Metrics match scikit-learn; final test reused; changed source and failed candidates rejected; interruption and out-of-memory failure cleaned up.");
 } finally {
   controller.abort();
   await cleanupContainers(root).catch(() => {});

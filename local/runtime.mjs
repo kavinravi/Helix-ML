@@ -6,6 +6,12 @@ import { runProcess, expired, remainingTime } from "./process.mjs";
 export const IMAGE = "helix-ml:local";
 export const owner = (root) => createHash("sha256").update(resolve(root)).digest("hex").slice(0, 16);
 
+export function runtimeMemoryMb() {
+  const value = Number(process.env.HELIX_TRAIN_MEMORY_MB || (process.env.HELIX_HOSTED_WORKER ? 1200 : 3072));
+  if (!Number.isInteger(value) || value < 128 || value > 65536) throw new Error("HELIX_TRAIN_MEMORY_MB must be an integer from 128 to 65536.");
+  return value;
+}
+
 export async function runtimeStatus() {
   try {
     await runProcess(process.env.HELIX_PYTHON || "python3", ["-c", "import sys; assert sys.version_info >= (3,11), 'Python 3.11 or newer is required'"], { timeout: 5000 });
@@ -17,7 +23,7 @@ export async function runtimeStatus() {
     const image = await runProcess("docker", ["image", "inspect", IMAGE, "--format", '{{index .Config.Labels "helix.runtime"}} {{.Id}}'], { timeout: 8000 });
     const [version, imageId] = image.output.trim().split(/\s+/);
     if (version !== "2" || !/^sha256:[a-f0-9]{64}$/.test(imageId)) throw new Error("Runtime needs rebuilding");
-    return { ready: true, imageId, detail: process.env.HELIX_HOSTED_WORKER ? "Cloud CPU training ready" : "CPU training ready · 2 cores and 3 GB RAM per fit. Docker Desktop must remain running." };
+    return { ready: true, imageId, detail: process.env.HELIX_HOSTED_WORKER ? "Cloud CPU training ready" : `CPU training ready · 2 cores and ${runtimeMemoryMb()} MiB RAM per fit. Docker Desktop must remain running.` };
   } catch { return { ready: false, missing: "image", detail: "Run npm run setup to build or update the CPU training runtime." }; }
 }
 
@@ -64,10 +70,10 @@ export async function container(context, command, { mounts = [], network = false
   }, 1000);
   try {
     const result = await runProcess("docker", [
-      "run", "--rm", "--name", name,
+      "run", "--name", name,
       "--label", `helix.owner=${owner(context.root)}`, "--label", `helix.run=${context.runId}`,
       ...(network ? [] : ["--network=none"]), "--read-only", "--cap-drop=ALL",
-      "--security-opt=no-new-privileges", "--pids-limit=128", process.env.HELIX_HOSTED_WORKER ? "--memory=1200m" : "--memory=3g", "--cpus=2",
+      "--security-opt=no-new-privileges", "--pids-limit=128", `--memory=${runtimeMemoryMb()}m`, "--cpus=2",
       "--ulimit", "fsize=268435456:268435456", "--tmpfs=/tmp:rw,size=512m",
       "--user", context.user,
       "-e", "PYTHONPATH=/code:/packages", "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "NUMBA_CACHE_DIR=/tmp/numba",
@@ -77,6 +83,10 @@ export async function container(context, command, { mounts = [], network = false
     if (writable && await directoryBytes(writable) > limit) throw new Error("Runtime output exceeds the disk limit.");
     return result;
   } catch (error) {
+    if (!combined.aborted && !diskError) {
+      const state = await runProcess("docker", ["inspect", "--format", "{{.State.OOMKilled}}", name], { timeout: 10_000 }).catch(() => null);
+      if (state?.output.trim() === "true") throw new Error(`Execution exceeded this worker's ${runtimeMemoryMb()} MiB RAM limit. Use chunked loading, smaller batches, fewer features, or a model with a smaller working set. The completed trials are preserved.`);
+    }
     throw diskError || error;
   } finally {
     if (timer) clearInterval(timer);
