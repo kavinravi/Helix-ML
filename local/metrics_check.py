@@ -2,6 +2,8 @@
 import csv
 import json
 import math
+import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -63,6 +65,11 @@ for name, spec in CATALOG.items():
 
 with TemporaryDirectory() as folder:
     data = Path(folder)
+    request = {"task": {"metric": "mean_poisson_deviance"}, "truth": [0, 0], "predictions": [.1, .1], "classes": [], "baseline": {"prediction": 0}}
+    (data / "input.json").write_text(json.dumps(request))
+    subprocess.run([sys.executable, str(Path(__file__).with_name("supervised.py")), folder], check=True)
+    result = json.loads((data / "score.json").read_text())
+    assert math.isclose(result["score"], .2) and "baselineError" in result and "baseline" not in result
     rows = [[i % 3 * 8 + math.sin(i), i % 3 * 6 + math.cos(i), math.sin(i)] for i in range(90)]
     for filename in ("train.csv", "validation.csv"):
         with (data / filename).open("w") as handle:

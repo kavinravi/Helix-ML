@@ -24,7 +24,7 @@ Successful readiness evidence persists for seven days, keyed to CLI version, run
 
 `npm run local` checks prerequisites, prepares the runtime, installs locked dependencies, builds the UI and starts the runner. Dataset/split validation precedes agent verification on new runs. A process lock prevents simultaneous runners from opening the same data folder and recovers a dead runner's lock on restart. Saved experiments can be copied into a new editable draft with **Use these settings**.
 
-Every scored evaluation now includes a trivial baseline fitted only on that fold's training labels, using the same metric and held-out rows. Validation/test baselines appear in experiment.json and the interface. With 0% test there is no test baseline or test score. Missing-value counts from the training pool are included in the schema shown to agents.
+Scored supervised evaluations include a trivial baseline fitted only on that fold's training labels, using the same metric and held-out rows, when that baseline is defined for the metric. Validation/test baselines appear in experiment.json and the interface. With 0% test there is no test baseline or test score. Missing-value counts from the training pool are included in the schema shown to agents.
 
 Stateless review calls receive the full experiment contract and explicit instructions to preserve the existing candidate except for correctness fixes. Small candidates include their current source and training schema directly in the review prompt; larger candidates use bounded file tools. Candidate plans must identify their actual model family; trial names use that implementation description rather than the research proposal's name. Repair logs retain the failure that triggered the correction.
 
@@ -112,7 +112,7 @@ The scaffold is a React and TypeScript frontend built with Vite. The local compa
 | CLI invocation adapters         | Prototype code exists for JSON event streams, native CLI authentication, and Helix MCP configuration. No live training session has verified them end to end. |
 | MLE-STAR loop                   | Prototype exists in `local/engine.mjs`. Requires substantial correctness work before activation.                                                             |
 | Data preparation                | Prototype uses a seeded stratified 80/20 split. It does not implement the requested CV or separate final test set.                                           |
-| Metrics                         | Accuracy, binary AUROC, multiclass log loss, RMSE, and MAE scoring functions exist. Extend validation and compare with reference libraries.                  |
+| Metrics                         | The shared catalog defines 61 classification, regression, clustering, and reduction metrics, with trusted library scoring and reference checks.                  |
 | Helix MCP                       | A stdio JSON-RPC server and nine tool definitions exist. Most network tools are unverified prototypes.                                                       |
 | Notebook output                 | UI preference exists. Notebook generation and validation are pending.                                                                                        |
 | Trained model export            | UI preference exists. Format compatibility, serialization, bundling, and reload checks are pending.                                                          |
@@ -146,7 +146,9 @@ type Task = {
   dataset: string;
   target: string;
   objective: string;
-  metric: "accuracy" | "auroc" | "log_loss" | "rmse" | "mae";
+  metric: Metric; // Canonical key from local/metric_catalog.json.
+  metrics?: Metric[]; // Joint objectives; first equals metric.
+  positiveClass?: string; // Binary classification label.
   minutes: number;
   trials: number;
   searchModels: boolean;
@@ -414,7 +416,7 @@ Read every caller before repairing these. A frontend checkbox without backend be
 | `local/agents.mjs`                    | Subscription status detection and native CLI adapter prototypes.                     |
 | `local/engine.mjs`                    | Unfinished experiment loop and persistence prototype.                                |
 | `local/prepare.py`                    | Seeded fixed-split CSV/asset preparation prototype.                                  |
-| `local/metrics.mjs`                   | Trusted metric scoring prototype.                                                    |
+| `local/metrics.mjs`                   | Shared metric catalog, aliases, and objective ranking; supervised.py runs trusted prediction scoring.                                                    |
 | `local/mcp.mjs`, `local/tools.mjs`    | Stdio protocol and research/cache connector prototypes.                              |
 | `local/process.mjs`                   | Bounded child processes and process-group interruption.                              |
 | `local/Dockerfile`, `local/setup.mjs` | Optional CPU training image and build helper.                                        |
@@ -499,3 +501,7 @@ Final results include a bounded scatterplot and representation.csv with original
 The 100,000-row and 128 MiB CSV preparation caps are removed. Inspection, hashing, snapshotting, and fold materialization stream the CSV; duplicate checks use temporary SQLite storage. Compact class/group codes and immutable protocol-v2 split indices remain in memory under an estimated preparation budget. Previous partition hashes remain compatible. Storage, schema, class-count, and asset limits still apply.
 
 Candidate admission estimates data buffers, output width, known model-specific allocations, and the trusted unsupervised scorer against the same RAM budget used by the training container. Chunked incremental candidates can use smaller data buffers. Static estimates cannot predict arbitrary generated code; Docker enforces the final limit, reports out-of-memory failures, and preserves completed trials. Defaults are 512 MiB preparation and 1,200 MiB hosted / 3,072 MiB local training, adjustable with HELIX_PREP_MEMORY_MB and HELIX_TRAIN_MEMORY_MB on appropriately provisioned workers. This does not make every estimator or scorer out-of-core, and training is never silently subsampled. The opt-in scaling check exercises one million rows, a CSV above the former size cap, and model/feature/fold memory limits.
+
+## Metric expansion (2026-10-08)
+
+Task planning, input validation, scoring, ranking, result labels, plots, and exports now share the 61-entry metric catalog. Standard F1/precision/recall use binary positive-class scoring or multiclass macro averaging; explicit macro/micro/weighted variants are available. ROC-AUC plus F1 and other same-direction supervised combinations rank by their equal-weight arithmetic mean and retain every individual score. The proposal exposes that objective before training. External clustering metrics require reference labels that never enter candidate training/prediction inputs. See README and the catalog for the full supported set, parameter defaults, and remaining task restrictions.

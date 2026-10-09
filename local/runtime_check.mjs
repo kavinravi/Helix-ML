@@ -186,6 +186,15 @@ for epoch in range(5):
     }
   }
   const context = { root, runId: randomUUID(), deadline, user: `${process.getuid()}:${process.getgid()}` };
+  const countRun = { id: randomUUID(), task: { dataset: join(root, "counts.csv"), target: "label", metric: "mean_poisson_deviance", validation: "holdout", folds: 3, seeds: [42], testFraction: 0, holdoutFraction: .2, output: "py", exportModel: false, policy: {} } };
+  const countSource = join(root, countRun.id, "source");
+  await mkdir(countSource, { recursive: true });
+  await writeFile(countRun.task.dataset, "x,label\n" + Array.from({length:20}, (_, i) => `${i},0`).join("\n"));
+  await writeFile(join(countSource, "train.py"), "import argparse,csv,json\nfrom pathlib import Path\np=argparse.ArgumentParser()\nfor key in ('train','validation','metadata','models','output','seed','config'):p.add_argument('--'+key)\na=p.parse_args()\nwith open(a.validation) as f:n=len(list(csv.DictReader(f)))\nPath(a.output).write_text(json.dumps([.1]*n))\n");
+  await prepareEvaluation(root, countRun, {deadline:null});
+  const countResult = await evaluateCandidate(root, countRun, countSource, {candidateId:"constant", deadline:null});
+  assert.ok(Math.abs(countResult.score - .2) < 1e-12);
+  assert.equal(countResult.baseline, null, "An undefined comparator must not reject a valid model score");
   console.log((await container(context, ["python", "/harness/metrics_check.py"], { mounts: [[fileURLToPath(new URL(".", import.meta.url)), "/harness"]] })).output.trim());
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 1000);

@@ -87,7 +87,11 @@ if __name__ == "__main__":
         result = evaluate(request["task"], request["truth"], request["predictions"], request["classes"])
         baseline = request.get("baseline")
         if baseline:
-            result["baseline"] = evaluate(request["task"], request["truth"], [baseline["prediction"]] * len(request["truth"]), request["classes"])
+            try:
+                result["baseline"] = evaluate(request["task"], request["truth"], [baseline["prediction"]] * len(request["truth"]), request["classes"])
+            except ValueError as error:
+                # A valid model can beat a constant baseline outside the metric's domain.
+                result["baselineError"] = str(error)
         (work / "score.json").write_text(json.dumps(result, allow_nan=False))
     except (ValueError, TypeError, KeyError) as error:
         sys.exit(str(error))

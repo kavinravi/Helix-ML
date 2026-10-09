@@ -166,12 +166,13 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
         supervised = await json(join(scoring, "score.json"));
       }
       let baselineScore = null;
-      if (baseline) {
+      if (baseline && supervised.baseline) {
         baselineName = baseline.name;
         const measuredBaseline = supervised.baseline;
         baselineScore = measuredBaseline.score;
         baselineResults.push(measuredBaseline);
       }
+      if (supervised?.baselineError) onEvent("system", `Baseline unavailable: ${supervised.baselineError}`);
       // Validate prediction shape/values even for an unscored refit. Never report its in-sample score.
       const checkedScore = unsupervised ? measured.score : supervised.score;
       const score = unscoredRefit ? null : checkedScore;
@@ -190,7 +191,7 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
   }
   if ((await sourceFingerprint(workspace)).sha256 !== source.sha256)
     throw new Error("Candidate source changed during evaluation; its scores cannot be accepted.");
-  const baseline = unscoredRefit || unsupervised ? null : { name: baselineName, ...aggregateScores(baselineResults, folds.length) };
+  const baseline = unscoredRefit || unsupervised || baselineResults.length !== folds.length ? null : { name: baselineName, ...aggregateScores(baselineResults, folds.length) };
   return { ...(unscoredRefit ? { score: null, deviation: null, foldScores: [], evaluations: results } : aggregateScores(results, folds.length)), baseline, ...(projection ? { projection } : {}), ...(trainingHistory ? { trainingHistory } : {}), protocolHash: protocol.sha256, sourceHash: source.sha256 };
 }
 
