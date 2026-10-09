@@ -350,7 +350,7 @@ export async function createService({
         try {
           const body = await jsonBody(request);
           // Task and metric are provisional here; fully validate the agent's proposal before returning it.
-          const draft = validateTask({ ...body, learning: "supervised", metric: "accuracy", target: body.target || "__pending_target__", searchModels: true, model: "" });
+          const draft = validateTask({ ...body, learning: "supervised", metric: "accuracy", metrics: undefined, positiveClass: undefined, target: body.target || "__pending_target__", searchModels: true, model: "" });
           draft.target = typeof body.target === "string" ? body.target.trim() : "";
           const provider = (await getProviders()).find(p => p.id === draft.agent);
           if (!provider?.authenticated) throw new Error("Connect your coding agent before reviewing an experiment.");

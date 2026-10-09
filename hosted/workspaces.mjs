@@ -19,7 +19,7 @@ export function workspaces(store) {
       if (result.exitCode !== 0) throw new Error('Could not prepare the saved workspace.');
     }
     for (const folder of ['local', 'hosted']) {
-      const names = (await readdir(join(project, folder))).filter(name => folder === 'local' ? /\.(mjs|py)$/.test(name) : name === 'worker.mjs');
+      const names = (await readdir(join(project, folder))).filter(name => folder === 'local' ? /\.(mjs|py)$/.test(name) || name === 'metric_catalog.json' : name === 'worker.mjs');
       await Promise.all(names.map(async name => sandbox.files.write(`/opt/helix/${folder}/${name}`, await readFile(join(project, folder, name)))));
     }
     const command = sandbox.exec('node /opt/helix/hosted/worker.mjs', {

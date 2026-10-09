@@ -16,7 +16,7 @@ import { request } from "node:http";
 import { spawn } from "node:child_process";
 import { createService } from "./server.mjs";
 import { validateTask, inside } from "./validate.mjs";
-import { scorePredictions, isBetter } from "./metrics.mjs";
+import { CATALOG, normalizeMetric, isBetter } from "./metrics.mjs";
 import { runProcess, expired, remainingTime } from "./process.mjs";
 import { agentStream, agentArguments, subscriptionEnvironment } from "./agents.mjs";
 import { availableTools, callTool } from "./tools.mjs";
@@ -83,6 +83,14 @@ test("runner validates configuration, isolates files, and enforces lifecycle bou
     assert.equal(isBetter("silhouette", .6, .5), true);
     assert.equal(isBetter("davies_bouldin", .5, .6), true);
     assert.equal(isBetter("trustworthiness", .9, .8), true);
+    const joint = resolveProposal(task, { ...proposal, learning: "supervised", metric: "auroc", metrics: ["auroc", "f1"], target: "label", excludedColumns: [] }, ["x", "label"]).task;
+    assert.deepEqual(joint.metrics, ["auroc", "f1"]);
+    assert.equal(isBetter("f1", .8, .7), true);
+    assert.throws(() => validateTask({ ...joint, metrics: ["auroc", "f1", "f1"] }), /unique/);
+    assert.throws(() => validateTask({ ...joint, metrics: ["auroc", "rmse"] }), /same task/);
+    assert.throws(() => validateTask({ ...joint, metrics: ["f1", "auroc"] }), /first/);
+    assert.throws(() => validateTask({ ...joint, positiveClass: 0 }), /positive class/);
+    assert.equal(validateTask({ ...joint, positiveClass: "yes" }).positiveClass, "yes");
     assert.deepEqual(availableTools(task, "setup").map(tool => tool.name), ["read_source", "write_source"]);
 
     assert.equal(validateTask({ ...task, minutes: null }).minutes, null);
@@ -177,29 +185,17 @@ test("runner validates configuration, isolates files, and enforces lifecycle bou
       /export format/,
     );
     assert.throws(() => validateTask({ ...task, policy: {} }), /permissions/);
-    assert.equal(scorePredictions("accuracy", ["a", "b"], ["a", "a"]), 0.5);
-    assert.equal(
-      scorePredictions(
-        "auroc",
-        ["n", "p", "n", "p"],
-        [0.1, 0.8, 0.4, 0.9],
-        ["n", "p"],
-      ),
-      1,
-    );
-    assert.equal(
-      scorePredictions("auroc", ["n", "p"], [0.5, 0.5], ["n", "p"]),
-      0.5,
-    );
-    assert.equal(scorePredictions("rmse", [1, 3], [1, 5]), Math.sqrt(2));
-    assert.equal(isBetter("log_loss", 0.2, 0.4), true);
-    assert.throws(() => scorePredictions("accuracy", ["a"], []), /Expected/);
-    assert.throws(() => scorePredictions("rmse", ["NaN"], [1]), /targets/);
-    assert.throws(() => scorePredictions("auroc", ["n", "unknown"], [.1, .9], ["n", "p"]), /Unknown/);
-    assert.throws(
-      () => scorePredictions("log_loss", ["a"], [[0.8, 0.8]], ["a", "b"]),
-      /summing/,
-    );
+    for (const [metric, spec] of Object.entries(CATALOG)) {
+      assert.equal(isBetter(metric, 2, 1), spec.maximize);
+      assert.equal(isBetter(metric, 1, null), true);
+    }
+    assert.equal(normalizeMetric("ROC-AUC"), "auroc");
+    assert.equal(normalizeMetric("F1 score"), "f1");
+    assert.equal(normalizeMetric("DB index"), "davies_bouldin");
+    assert.equal(normalizeMetric("neg_mean_squared_error"), "mse");
+    const scored = { score: .8, metricScores: { auroc: .9, f1: .7 } };
+    assert.deepEqual(aggregateScores([scored, scored], 2).metricScores, scored.metricScores);
+    assert.throws(() => aggregateScores([scored, {score:.5}], 2), /Every requested metric/);
 
     const source = join(root, "source");
     await mkdir(join(source, "images"), { recursive: true });

@@ -14,12 +14,13 @@ from helix_features import dense_features, preprocessor, read_features
 from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
 from sklearn.manifold import trustworthiness
-from sklearn.metrics import davies_bouldin_score, silhouette_score
+from sklearn import metrics as sklearn_metrics
+from supervised import CATALOG
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 
-def evaluate(data, predictions, seed, unscored=False):
+def evaluate(data, predictions, seed, unscored=False, truth=None):
     metadata = json.loads((data / "manifest.json").read_text())
     features, kind = metadata["features"], metadata["taskType"]
 
@@ -45,8 +46,7 @@ def evaluate(data, predictions, seed, unscored=False):
     n = reference.shape[0]
     if not isinstance(predictions, list) or len(predictions) != n:
         raise ValueError(f"Expected {n} outputs, one per evaluation row.")
-    # ponytail: quadratic metrics use the same seeded 1,000-row sample for every candidate.
-    # Increase this bound or use a blockwise estimator when large-sample precision is needed.
+    # shortcut: scores use a fixed 1,000-row sample; use blockwise metrics when large-sample precision is needed.
     sample = np.sort(np.random.default_rng(seed).choice(n, min(n, 1000), replace=False))
     display = sample[np.linspace(0, len(sample) - 1, min(len(sample), 300), dtype=int)]
     projection = {"kind": kind, "rows": n, "points": []}
@@ -64,9 +64,16 @@ def evaluate(data, predictions, seed, unscored=False):
         if unscored:
             score = None
         else:
-            if not 2 <= len(np.unique(labels[sample])) < len(sample):
-                raise ValueError("Clustering metrics need between 2 and n-1 clusters in the fixed evaluation sample.")
-            score = float(silhouette_score(reference[sample], labels[sample]) if metadata["metric"] == "silhouette" else davies_bouldin_score(dense_features(reference[sample]), labels[sample]))
+            spec = CATALOG[metadata["metric"]]
+            if spec.get("targetRequired"):
+                if not isinstance(truth, list) or len(truth) != n or any(not isinstance(label, str) for label in truth):
+                    raise ValueError("This clustering metric requires a ground-truth label column, held outside training.")
+                score = float(getattr(sklearn_metrics, spec["function"])(np.asarray(truth)[sample], labels[sample]))
+            else:
+                if not 2 <= len(np.unique(labels[sample])) < len(sample):
+                    raise ValueError("Clustering metrics need between 2 and n-1 clusters in the fixed evaluation sample.")
+                reference_sample = reference[sample] if metadata["metric"] == "silhouette" else dense_features(reference[sample])
+                score = float(getattr(sklearn_metrics, spec["function"])(reference_sample, labels[sample]))
     elif kind == "reduction":
         variance_mode = metadata.get("reductionMode") == "variance"
         expected = None
@@ -96,7 +103,10 @@ def evaluate(data, predictions, seed, unscored=False):
                 raise ValueError("Variance-target outputs must come from PCA fitted on the training-fitted reference encoding, with whitening disabled.")
         projection.update({"dimensions": int(dimensions), **extra, "axes": ["Dimension 1", "Dimension 2" if dimensions > 1 else ""]})
         projection["points"] = [{"row": int(i), "x": float(embedding[i, 0]), "y": float(embedding[i, 1]) if dimensions > 1 else 0} for i in display]
-        score = None if unscored else float(trustworthiness(reference[sample], embedding[sample], n_neighbors=min(5, (len(sample) - 1) // 2)))
+        original, reduced = reference[sample], embedding[sample]
+        if metadata["metric"] == "continuity":
+            original, reduced = reduced, dense_features(original)
+        score = None if unscored else float(trustworthiness(original, reduced, n_neighbors=min(5, (len(sample) - 1) // 2)))
         extra["dimensions"] = int(dimensions)
     else:
         raise ValueError("Unsupported unsupervised learning mode.")
@@ -108,7 +118,8 @@ def evaluate(data, predictions, seed, unscored=False):
 if __name__ == "__main__":
     try:
         data, work = Path(sys.argv[1]), Path(sys.argv[2])
-        result = evaluate(data, json.loads((work / "predictions.json").read_text()), int(sys.argv[3]), "--unscored" in sys.argv)
+        truth = json.loads((work / "labels.json").read_text()) if (work / "labels.json").exists() else None
+        result = evaluate(data, json.loads((work / "predictions.json").read_text()), int(sys.argv[3]), "--unscored" in sys.argv, truth)
         (work / "score.json").write_text(json.dumps(result, allow_nan=False))
     except (ValueError, TypeError) as error:
         sys.exit(str(error))

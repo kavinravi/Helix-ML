@@ -31,6 +31,17 @@ try {
     task.trials = 1; task.policy.tuning = true; task.minutes = 5;
     task.objective = "Predict short or long from the numeric measurements using a DecisionTreeClassifier. Start with the defaults; tuning is allowed in later trials.";
   }
+  if (process.env.HELIX_TEST_MULTIMETRIC === "1") {
+    task = { ...task, objective: "Run a logistic regression model and maximize roc-auc & f1 score", trials: 1, minutes: 10, output: "py", testFraction: .2 };
+    const proposed = await request("/tasks/plan", task);
+    assert.equal(proposed.status, 200, JSON.stringify(proposed.body));
+    task = proposed.body.task;
+    assert.deepEqual(task.metrics, ["auroc", "f1"]);
+    assert.equal(task.positiveClass, "short");
+    assert.match(task.model, /LogisticRegression/);
+    assert.equal((await request("/runs")).body.length, 0);
+    console.log("Native planning accepted the exact ROC-AUC & F1 request with both metrics and a stated positive class.");
+  }
   if (process.env.HELIX_TEST_UNSUPERVISED === "1") {
     await writeFile(join(dataset, "train.csv"), "length,width,depth,mass,color,description,label\n" + Array.from({ length: 90 }, (_, i) => `${i / 10},${(i * 17 % 31) / 10},${i / 5 + Math.sin(i)},${i / 3 + Math.cos(i)},${i%2 ? "red" : "blue"},${i%2 ? "apple fruit orchard" : "ocean waves water"} sample${i},${i < 45 ? "short" : "long"}`).join("\n"));
     task = { ...task, target: "", objective: "Use PCA for dimensionality reduction, retaining at least 90% cumulative variance of the reference-encoded features. Include the numeric features, categorical color, and free-text description. Exclude label. Maximize trustworthiness.", reductionMode: "variance", varianceTarget: .9, dimensions: 2, trials: 1, minutes: 10, output: "py", testFraction: .2 };
@@ -80,10 +91,19 @@ try {
   assert.ok(run.trials.every(trial => Number.isFinite(trial.score)), "Each scheduled candidate must produce a measured score");
   await writeFile(join(root, "timing.json"), JSON.stringify({ agent: task.agent, searchModels: task.searchModels, readinessSeconds, cachedReadinessSeconds, firstTrialSeconds, totalSeconds: (Date.now() - requestedAt) / 1000 }, null, 2));
   if (process.env.HELIX_TEST_UNSUPERVISED === "1") { assert.ok(run.projection.cumulativeVariance >= .9); assert.ok(run.projection.dimensions > 0); console.log(`PCA retained ${run.projection.dimensions} components, ${(run.projection.cumulativeVariance * 100).toFixed(2)}% variance.`); }
+  if (process.env.HELIX_TEST_MULTIMETRIC === "1") {
+    for (const values of [run.metricScores, run.testMetricScores]) {
+      assert.deepEqual(Object.keys(values), ["auroc", "f1"]);
+      assert.ok(Object.values(values).every(value => Number.isFinite(value) && value >= 0 && value <= 1));
+    }
+    assert.equal(run.score, (run.metricScores.auroc + run.metricScores.f1) / 2);
+    assert.equal(run.testScore, (run.testMetricScores.auroc + run.testMetricScores.f1) / 2);
+  }
   const artifacts = (await request(`/runs/${id}/artifacts`)).body;
   for (const name of ["final/helix-solution.zip", `final/source/${task.output === "ipynb" ? "solution.ipynb" : "train.py"}`, "final/model/model_manifest.json", "final/checksums.json", "final/requirements.lock"]) assert.ok(artifacts.some((file) => file.path === name), `Missing ${name}`);
   const manifest = JSON.parse(await readFile(join(root, "runs", id, "final", "experiment.json"), "utf8"));
   assert.equal(manifest.exportVerified, true);
+  if (process.env.HELIX_TEST_MULTIMETRIC === "1") assert.deepEqual(manifest.metricScores, run.metricScores);
   const download = await fetch(url + `/api/runs/${id}/file?path=final/helix-solution.zip`, { headers: { Authorization: `Bearer ${service.token}` } });
   assert.equal(download.status, 200);
   assert.ok((await download.arrayBuffer()).byteLength > 1000);

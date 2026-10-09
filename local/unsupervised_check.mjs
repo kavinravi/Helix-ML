@@ -21,7 +21,7 @@ p = argparse.ArgumentParser()
 for flag in ('train', 'validation', 'metadata', 'models', 'output', 'seed', 'config'): p.add_argument('--' + flag)
 a = p.parse_args()
 c = json.loads(Path(a.config).read_text()); m = json.loads(Path(a.metadata).read_text())
-assert m['target'] == ''
+assert m['target'] in ('', 'label')
 def matrix(path):
     with open(path) as f:
         reader = csv.DictReader(f)
@@ -63,10 +63,10 @@ try {
   await writeFile(mixed, 'a,b,category,notes,label\n'+Array.from({length:120},(_,i)=>`${i%3*8+Math.sin(i)},${Math.cos(i)},${['red','green','blue'][i%3]},${['apple fruit orchard','forest trees leaves','ocean wave water'][i%3]} record${i},label${i%3}`).join('\n'));
   await writeFile(textOnly, 'notes\n'+Array.from({length:120},(_,i)=>`${['apple fruit orchard','forest trees leaves','ocean wave water'][i%3]} record${i}`).join('\n'));
   const image = (await runProcess('docker', ['image','inspect',IMAGE,'--format','{{.Id}}'])).output.trim();
-  for (const mode of process.env.HELIX_TEST_UMAP ? ['umap'] : ['silhouette','davies_bouldin','dimensions','variance','all-variance','mixed-silhouette','mixed-davies_bouldin','mixed-dimensions','mixed-variance','text-dimensions']) {
+  for (const mode of process.env.HELIX_TEST_UMAP ? ['umap'] : process.env.HELIX_TEST_METRICS ? ['calinski_harabasz', 'adjusted_rand', 'continuity'] : ['silhouette','davies_bouldin','dimensions','variance','all-variance','mixed-silhouette','mixed-davies_bouldin','mixed-dimensions','mixed-variance','text-dimensions']) {
     const variant=mode.replace(/^(mixed|text)-/,'');
-    const learning = variant.includes('variance') || ['dimensions','umap'].includes(variant) ? 'reduction' : 'clustering';
-    const task = { dataset:mode.startsWith('mixed-')?mixed:mode.startsWith('text-')?textOnly:dataset, target:'', learning, metric: learning === 'clustering' ? variant : 'trustworthiness', dimensions:2, reductionMode: mode.includes('variance') ? 'variance' : 'dimensions', varianceTarget: mode === 'all-variance' ? 1 : .8, excludedColumns:mode.startsWith('text-')?[]:['label'], validation:'cv', folds:3, seeds:[42], splitStrategy:'independent', testFraction: mode === 'dimensions' ? .2 : 0, holdoutFraction:.2, assetColumns:[], searchModels:false, model:learning === 'clustering' ? 'sklearn.cluster.KMeans' : 'sklearn.decomposition.PCA', output:'py', exportModel:true, exportFormat:'joblib', policy:{augmentation:false,features:false,regularization:false,tuning:false,pretrained:false,ensemble:false} };
+    const learning = variant.includes('variance') || ['dimensions','umap','continuity'].includes(variant) ? 'reduction' : 'clustering';
+    const task = { dataset:mode.startsWith('mixed-')?mixed:mode.startsWith('text-')?textOnly:dataset, target:mode==='adjusted_rand'?'label':'', learning, metric: learning === 'clustering' || mode==='continuity' ? variant : 'trustworthiness', dimensions:2, reductionMode: mode.includes('variance') ? 'variance' : 'dimensions', varianceTarget: mode === 'all-variance' ? 1 : .8, excludedColumns:mode.startsWith('text-')||mode==='adjusted_rand'?[]:['label'], validation:'cv', folds:3, seeds:[42], splitStrategy:'independent', testFraction: mode === 'dimensions' ? .2 : 0, holdoutFraction:.2, assetColumns:[], searchModels:false, model:learning === 'clustering' ? 'sklearn.cluster.KMeans' : 'sklearn.decomposition.PCA', output:'py', exportModel:true, exportFormat:'joblib', policy:{augmentation:false,features:false,regularization:false,tuning:false,pretrained:false,ensemble:false} };
     const run = { id: mode, task, best:'candidate', trials:[] };
     const workspace = join(root, run.id, 'source'); await mkdir(workspace, { recursive:true });
     await writeFile(join(workspace,'train.py'), mode === 'umap' ? source.replace('from sklearn.decomposition import PCA','from sklearn.decomposition import PCA\nfrom umap import UMAP').replace("estimator = PCA(n_components=None if components == 1 and c['reductionMode'] == 'variance' else components, svd_solver='full')", "estimator = UMAP(n_components=c['dimensions'], n_neighbors=10, n_epochs=30, random_state=int(a.seed), transform_seed=int(a.seed), n_jobs=1)") : source); await writeFile(join(workspace,'predict.py'), predict);
@@ -79,7 +79,7 @@ try {
       assert.match(await callTool('install_package',{name:'umap-learn',version:'0.5.8'},installContext),/already installed/);
     }
     const metadata = await prepareEvaluation(root, run, { deadline:null });
-    assert.equal(metadata.target,''); assert.equal(metadata.taskType,learning); assert.equal(metadata.features.length,mode.startsWith('text-')?1:4); assert.equal(metadata.featureEncoding,'mixed-v1');
+    assert.equal(metadata.target,mode==='adjusted_rand'?'label':''); assert.equal(metadata.taskType,learning); assert.equal(metadata.features.length,mode.startsWith('text-')?1:4); assert.equal(metadata.featureEncoding,'mixed-v1');
     if (mode === 'silhouette') {
       delete metadata.featureEncoding; // A saved numeric-only run must remain usable after the update.
       await writeFile(join(root,run.id,'evaluation','manifest.json'),JSON.stringify(metadata));
@@ -122,7 +122,7 @@ try {
       assert.ok(continued.projection.points.every(p=>!testRows.includes(p.row)));
     }
   }
-  if (!process.env.HELIX_TEST_UMAP) {
+  if (!process.env.HELIX_TEST_UMAP && !process.env.HELIX_TEST_METRICS) {
   const encodingChecks=String.raw`import os, sys
 sys.path.insert(0,'/harness')
 import numpy as np

@@ -1,3 +1,4 @@
+import { metricName } from "./metrics";
 import type { Run } from "./types";
 
 type Point = { x: number; y: number; label: string };
@@ -47,7 +48,7 @@ export default function RunPlots({ run }: { run: Run }) {
   const points = run.trials.flatMap((trial, index) => trial.score != null && Number.isFinite(trial.score) ? [{ x: run.followup ? index : index + 1, y: trial.score, label: trial.phase === "inheritance" ? "Previous best" : `${run.followup ? index : index + 1}. ${trial.name}` }] : []);
   return <div className="run-plots">
     {run.projection && <Projection value={run.projection} />}
-    <Plot title={`Validation ${run.task.metric.replaceAll("_", " ")}`} points={points} baseline={run.baseline?.score} percent={run.task.metric === "accuracy"} xLabel="Trial" />
+    {run.task.metrics ? run.task.metrics.map(metric => <Plot key={metric} title={`Validation ${metricName(metric)}`} points={run.trials.flatMap((trial, index) => trial.metricScores?.[metric] != null ? [{ x: run.followup ? index : index + 1, y: trial.metricScores[metric]!, label: trial.name }] : [])} xLabel="Trial" />) : <Plot title={`Validation ${metricName(run.task.metric)}`} points={points} baseline={run.baseline?.score} percent={run.task.metric === "accuracy"} xLabel="Trial" />}
     {(["loss", "accuracy"] as const).map(metric => {
       const history = (run.trainingHistory || []).flatMap(point => point[metric] == null ? [] : [{ x: point.step, y: point[metric]!, label: `Step ${point.step}` }]);
       return history.length > 1 ? <Plot key={metric} title={`Final model · training ${metric}`} points={history} percent={metric === "accuracy"} xLabel="Training step" /> : null;

@@ -40,6 +40,15 @@ with TemporaryDirectory(prefix="helix-protocol-") as folder:
     assert truth["baseline"] is None and truth["targets"] == [None] * len(rows)
     with (root / "unlabeled" / "train.csv").open() as handle:
         assert csv.DictReader(handle).fieldnames == ["x", "subject", "time"]
+    benchmark = {**task, "learning": "clustering", "metric": "adjusted_rand"}
+    reference = root / "external-clustering"
+    info = prepare(benchmark, reference)
+    assert info["target"] == "label" and "label" not in info["features"]
+    truth = materialize(reference, root / "external-fold", "seed-42-fold-1")
+    assert set(truth["targets"]) == {"0", "1"} and truth["baseline"] is None
+    for name in ("train.csv", "validation.csv"):
+        with (root / "external-fold" / name).open() as handle:
+            assert "label" not in csv.DictReader(handle).fieldnames
     rejects(lambda: inspect_dataset({**unsupervised, "dimensions": 3}), "fewer")
     rejects(lambda: inspect_dataset({**unsupervised, "excludedColumns": ["missing"]}), "Excluded")
     reduction_policy = {**policy_task, "learning": "reduction", "model": "sklearn.decomposition.PCA"}
@@ -121,6 +130,13 @@ with TemporaryDirectory(prefix="helix-protocol-") as folder:
         measured = materialize(destination, root / (metric + "-fold"), fold["id"])
         assert measured["targets"] == [rows[i]["label"] for i in fold["validation"]]
         assert measured["baseline"] == reference_prediction(metric, [rows[i]["label"] for i in fold["train"]], [])
+    joint={**task,"metric":"auroc","metrics":["auroc","f1"],"positiveClass":"0"}
+    info=prepare(joint,root/"joint")
+    assert info["taskType"]=="classification" and info["positiveClass"]=="0" and info["metrics"]==["auroc","f1"]
+    rejects(lambda: inspect_dataset({**joint,"positiveClass":"absent"}), "positive class")
+    joint_truth=materialize(root/"joint",root/"joint-fold","seed-42-fold-1")
+    assert len(joint_truth["baseline"]["prediction"])==2
+    assert inspect_dataset({**task,"metric":"f1"})[2]["taskType"]=="classification"
     rejects(lambda: inspect_dataset({**task, "target": "absent"}), "absent")
     write_csv(source / "train.csv", rows[0].keys(), rows + [rows[0]])
     rejects(lambda: inspect_dataset(task), "repeated")

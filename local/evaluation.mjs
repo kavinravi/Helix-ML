@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { runProcess, expired, remainingTime } from "./process.mjs";
 import { container, IMAGE } from "./runtime.mjs";
-import { scorePredictions } from "./metrics.mjs";
 import { harness, verifyExport } from "./export.mjs";
 
 const preparer = fileURLToPath(new URL("./prepare.py", import.meta.url));
@@ -57,7 +56,10 @@ export function aggregateScores(results, expected) {
     throw new Error("Every requested fold and seed must finish before a candidate can be compared.");
   const score = results.reduce((sum, r) => sum + r.score / expected, 0);
   const deviation = Math.sqrt(results.reduce((sum, r) => sum + (r.score - score) ** 2 / expected, 0));
-  return { score, deviation, foldScores: results.map((r) => r.score), evaluations: results };
+  const names = Object.keys(results[0].metricScores || {});
+  if (results.some(result => names.some(name => !Number.isFinite(result.metricScores?.[name])))) throw new Error("Every requested metric must finish on every fold.");
+  return { score, deviation, foldScores: results.map((r) => r.score), evaluations: results,
+    ...(names.length ? { metricScores: Object.fromEntries(names.map(name => [name, results.reduce((sum, result) => sum + result.metricScores[name] / expected, 0)])) } : {}) };
 }
 
 export async function evaluateCandidate(root, run, workspace, { signal, deadline, candidateId, onEvent = () => {}, final = false, image, packages: packagePath }) {
@@ -102,6 +104,7 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
         learning: run.task.learning || "supervised", dimensions: run.task.dimensions ?? 2,
         reductionMode: run.task.reductionMode || "dimensions", varianceTarget: run.task.varianceTarget ?? .95,
         metric: run.task.metric, seed: fold.seed, policy: run.task.policy,
+        metrics: run.task.metrics || [run.task.metric], positiveClass: metadata.positiveClass,
         model: run.task.model, searchModels: run.task.searchModels,
         exportModel: run.task.exportModel, exportFormat: run.task.exportFormat,
       };
@@ -116,12 +119,14 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
       });
       if ((await lstat(join(output, "predictions.json"))).size > 64_000_000) throw new Error("Predictions exceed the 64 MB limit.");
       const predictions = await json(join(output, "predictions.json"));
+      const { targets: truth, baseline } = await json(truthPath);
       let measured;
       if (unsupervised) {
         const scoring = join(scratch, "scoring");
         await mkdir(scoring);
         // Canonical JSON only. No generated code, packages, symlinks or pickles enter the scorer.
         await writeFile(join(scoring, "predictions.json"), JSON.stringify(predictions));
+        if (metadata.target && metadata.taskType === "clustering") await writeFile(join(scoring, "labels.json"), JSON.stringify(truth));
         await container(context, ["python", "/harness/unsupervised.py", "/data", "/work", String(fold.seed), ...(unscoredRefit ? ["--unscored"] : [])], {
           signal, writable: scoring, mounts: [[harness, "/harness"], [data, "/data"], [scoring, "/work", "rw"]],
         });
@@ -150,18 +155,29 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
         const format = await verifyExport(context, workspace, data, output, models, packages, predictions, run.task, signal);
         onEvent("export", `${fold.id}: ${format} export reloaded; predictions match.`);
       }
-      const { targets: truth, baseline } = await json(truthPath);
+      let supervised;
+      if (!unsupervised) {
+        const scoring = join(scratch, "scoring");
+        await mkdir(scoring);
+        await writeFile(join(scoring, "input.json"), JSON.stringify({task:run.task,truth,predictions,classes:metadata.classes,baseline}));
+        await container(context, ["python", "/harness/supervised.py", "/work"], {
+          signal, writable: scoring, mounts: [[harness, "/harness"], [scoring, "/work", "rw"]],
+        });
+        supervised = await json(join(scoring, "score.json"));
+      }
       let baselineScore = null;
       if (baseline) {
         baselineName = baseline.name;
-        baselineScore = scorePredictions(run.task.metric, truth, Array(truth.length).fill(baseline.prediction), metadata.classes);
-        baselineResults.push({ score: baselineScore });
+        const measuredBaseline = supervised.baseline;
+        baselineScore = measuredBaseline.score;
+        baselineResults.push(measuredBaseline);
       }
       // Validate prediction shape/values even for an unscored refit. Never report its in-sample score.
-      const checkedScore = unsupervised ? measured.score : scorePredictions(run.task.metric, truth, predictions, metadata.classes);
+      const checkedScore = unsupervised ? measured.score : supervised.score;
       const score = unscoredRefit ? null : checkedScore;
       const result = { id: fold.id, seed: fold.seed, fold: fold.fold, trainingRows: fold.train.length,
         validationRows: fold.validation.length, score, baselineScore: unscoredRefit ? null : baselineScore, duration: (Date.now() - started) / 1000,
+        ...(!unscoredRefit && supervised ? { metricScores: supervised.metricScores } : {}),
         ...(measured ? { scoringRows: measured.scoringRows, ...(measured.dimensions !== undefined ? { dimensions: measured.dimensions } : {}), ...(measured.cumulativeVariance !== undefined ? { cumulativeVariance: measured.cumulativeVariance } : {}) } : {}) };
       results.push(result);
       await writeFile(join(scratch, "result.json"), JSON.stringify(result), { mode: 0o600 });

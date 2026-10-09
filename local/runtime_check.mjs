@@ -4,11 +4,11 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, cp } from "node:fs/pr
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { prepareEvaluation, evaluateCandidate, evaluateFinal, aggregateScores } from "./evaluation.mjs";
 import { cleanupContainers, container, IMAGE, runtimeMemoryMb } from "./runtime.mjs";
 import { runProcess } from "./process.mjs";
 import { makeNotebook, finishBundle } from "./export.mjs";
-import { scorePredictions } from "./metrics.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "helix-runtime-check-"));
 const controller = new AbortController();
@@ -186,9 +186,7 @@ for epoch in range(5):
     }
   }
   const context = { root, runId: randomUUID(), deadline, user: `${process.getuid()}:${process.getgid()}` };
-  const reference = JSON.parse((await container(context, ["python", "-c", "import json; from sklearn.metrics import accuracy_score, roc_auc_score, log_loss, root_mean_squared_error, mean_absolute_error; print(json.dumps([accuracy_score([0,1,0,1],[0,1,1,1]),roc_auc_score([0,1,0,1],[.1,.5,.5,.9]),log_loss([0,1],[[0.,1.],[0.,1.]],labels=[0,1]),root_mean_squared_error([1,3],[1,5]),mean_absolute_error([1,3],[1,5])]))"])).output);
-  const measured = [scorePredictions("accuracy", [0,1,0,1], [0,1,1,1], [0,1]), scorePredictions("auroc", [0,1,0,1], [.1,.5,.5,.9], [0,1]), scorePredictions("log_loss", [0,1], [[0,1],[0,1]], [0,1]), scorePredictions("rmse", [1,3], [1,5]), scorePredictions("mae", [1,3], [1,5])];
-  reference.forEach((value, i) => assert.ok(Math.abs(value - measured[i]) < 1e-12, `Metric ${i} differs from scikit-learn`));
+  console.log((await container(context, ["python", "/harness/metrics_check.py"], { mounts: [[fileURLToPath(new URL(".", import.meta.url)), "/harness"]] })).output.trim());
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 1000);
   try {

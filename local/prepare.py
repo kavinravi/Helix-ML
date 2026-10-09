@@ -21,7 +21,8 @@ import sys
 from statistics import fmean, median
 import tempfile
 
-METRICS = {"accuracy", "auroc", "log_loss", "rmse", "mae", "silhouette", "davies_bouldin", "trustworthiness"}
+CATALOG = json.loads(Path(__file__).with_name("metric_catalog.json").read_text())
+METRICS = set(CATALOG)
 MAX_CSV = 2_000_000_000  # Storage/upload limit, not a RAM or row limit.
 MAX_ASSETS = 2 * 1024 ** 3
 
@@ -157,7 +158,7 @@ def estimate_resources(manifest, task, workspace=None):
     matrix_bytes = n * len(features) * 8 + n * len(text) * 64 + string_bytes * 4
     if manifest.get("featureEncoding") == "mixed-v1":
         matrix_bytes += string_bytes * 16 + n * len(text) * 16
-    outputs = len(manifest["classes"]) if task["metric"] == "log_loss" else (task.get("dimensions") or 2) if manifest["taskType"] == "reduction" else 1
+    outputs = len(manifest["classes"]) if manifest["taskType"] == "classification" and (CATALOG[task["metric"]]["response"] == "probabilities" or len(task.get("metrics", [])) > 1) else (task.get("dimensions") or 2) if manifest["taskType"] == "reduction" else 1
     if manifest["taskType"] == "reduction" and task.get("reductionMode") == "variance":
         outputs = len(features)
     output_bytes = n * outputs * 16
@@ -242,13 +243,22 @@ def inspect_dataset(task, columns_only=False):
     if learning not in {"supervised", "clustering", "reduction"}:
         raise ValueError("Choose a supported learning mode.")
     unsupervised, metric = learning != "supervised", task["metric"]
-    target = "" if unsupervised else task["target"]
-    if not unsupervised and target not in columns:
+    spec = CATALOG.get(metric)
+    if not spec:
+        raise ValueError("Choose a supported metric.")
+    external = bool(spec.get("targetRequired"))
+    target = task.get("target", "") if not unsupervised or external else ""
+    if (not unsupervised or external) and target not in columns:
         raise ValueError(f"Target column {target!r} is absent. Columns: {', '.join(columns)}")
-    allowed = {"silhouette", "davies_bouldin"} if learning == "clustering" else {"trustworthiness"} if learning == "reduction" else {"accuracy", "auroc", "log_loss", "rmse", "mae"}
-    if metric not in allowed:
+    kind = spec["kind"]
+    if (learning == "supervised" and kind not in {"classification", "regression"}) or (learning != "supervised" and kind != learning):
         raise ValueError("Choose a metric for the selected learning mode.")
-    classification = metric in {"accuracy", "auroc", "log_loss"}
+    metrics = task.get("metrics", [metric])
+    if not isinstance(metrics, list) or not metrics or metrics[0] != metric or len(metrics) != len(set(metrics)) or any(item not in CATALOG or CATALOG[item]["kind"] != kind for item in metrics):
+        raise ValueError("Choose valid metrics for the learning task.")
+    if len(metrics) > 1 and (unsupervised or any(CATALOG[item]["maximize"] != spec["maximize"] for item in metrics)):
+        raise ValueError("Joint optimization needs metrics with the same direction.")
+    classification = kind == "classification"
     strategy = task.get("splitStrategy", "independent")
     if strategy not in {"independent", "group", "time"}:
         raise ValueError("Choose independent rows, grouped rows, or chronological evaluation.")
@@ -266,7 +276,7 @@ def inspect_dataset(task, columns_only=False):
     assets = task.get("assetColumns", [])
     if not isinstance(assets, list) or len(set(assets)) != len(assets) or any(c not in features for c in assets):
         raise ValueError("Asset columns must be unique input column names.")
-    rows = SplitRows(([target] if classification else []) + ([split_column] if split_column else []))
+    rows = SplitRows(([target] if classification or external else []) + ([split_column] if split_column else []))
     files, sizes = {}, {c: 0 for c in features}
     total, asset_memory, duplicate_rows = 0, 0, 0
     with tempfile.TemporaryDirectory(prefix="helix-inspect-") as temporary:
@@ -282,7 +292,7 @@ def inspect_dataset(task, columns_only=False):
                             raise ValueError("Every CSV row must have the same number of fields as the header.")
                         if target and not row[target].strip():
                             raise ValueError("Every row must have a target. Remove or label the missing targets first.")
-                        if target and not classification:
+                        if target and not unsupervised and not classification:
                             try:
                                 if not math.isfinite(float(row[target])):
                                     raise ValueError()
@@ -328,11 +338,13 @@ def inspect_dataset(task, columns_only=False):
     if len(rows) < 10:
         raise ValueError("At least 10 rows are needed; classification and CV may need more.")
     preparation_bytes = check_preparation_memory(task, rows, asset_memory)
-    classes = sorted(rows.values[target]) if classification else []
+    classes = sorted(rows.values[target]) if classification or external else []
     if classification and len(classes) < 2:
         raise ValueError("Classification needs at least two classes.")
-    if metric == "auroc" and len(classes) != 2:
-        raise ValueError("AUROC supports binary classification; choose accuracy or log loss for multiple classes.")
+    if any(item in {"auroc", "average_precision"} for item in metrics) and len(classes) != 2:
+        raise ValueError("Use roc_auc_ovr or roc_auc_ovo for multiclass ROC-AUC; binary AUROC/average precision need two classes.")
+    if task.get("positiveClass") is not None and (len(classes) != 2 or task["positiveClass"] not in classes):
+        raise ValueError("The positive class must be an existing label in a binary classification dataset.")
     if unsupervised:
         if assets:
             raise ValueError("Clustering and dimensionality reduction accept numeric, categorical, and text CSV columns. Image/audio asset files still need numeric embeddings; exclude asset paths or supply embeddings.")
@@ -356,6 +368,10 @@ def inspect_dataset(task, columns_only=False):
                 "assets": files, "assetBytes": total, "duplicateRows": duplicate_rows,
                 "splitStrategy": strategy, "splitColumn": split_column, "featureStringBytes": sizes,
                 "warnings": ["Confirm that rows are independent; hidden repeated entities cannot be detected automatically."] if strategy == "independent" else []}
+    if len(metrics) > 1:
+        manifest["metrics"] = metrics
+    if classification and len(classes) == 2:
+        manifest["positiveClass"] = task.get("positiveClass", classes[1])
     if unsupervised:
         manifest["featureEncoding"] = "mixed-v1"
     manifest["resources"] = estimate_resources(manifest, task)
@@ -531,18 +547,18 @@ def prepare(task, destination):
     return manifest
 
 
-def reference_prediction(metric, training_targets, classes):
+def reference_prediction(metric, training_targets, classes, positive_class=None):
     """Fit the trivial comparator on this fold's training labels only."""
-    if metric in {"rmse", "mae"}:
+    if CATALOG[metric]["kind"] == "regression":
         values = (float(value) for value in training_targets)
-        return {"name": "Training mean" if metric == "rmse" else "Training median",
-                "prediction": fmean(values) if metric == "rmse" else median(values)}
+        return {"name": "Training median" if metric in {"mae", "median_absolute_error", "pinball_loss"} else "Training mean",
+                "prediction": median(values) if metric in {"mae", "median_absolute_error", "pinball_loss"} else fmean(values)}
     counts = Counter(training_targets)
-    if metric == "accuracy":
+    if CATALOG[metric]["response"] == "labels":
         return {"name": "Most frequent class", "prediction": max(classes, key=lambda c: counts[c])}
     probabilities = [counts[c] / len(training_targets) for c in classes]
     return {"name": "Training class frequencies",
-            "prediction": probabilities[1] if metric == "auroc" else probabilities}
+            "prediction": probabilities[classes.index(positive_class) if positive_class is not None else 1] if metric == "auroc" else probabilities}
 
 
 def materialize(evaluation, destination, fold_id):
@@ -580,7 +596,7 @@ def materialize(evaluation, destination, fold_id):
                 train_index = next(train_ids, None)
             if index == valid_index:
                 valid.writerow(row)
-                if not unsupervised:
+                if not unsupervised or CATALOG[manifest["metric"]].get("targetRequired"):
                     value = row[manifest["target"]]
                     targets.append(classes[value] if classes else value)
                 valid_index = next(valid_ids, None)
@@ -591,6 +607,9 @@ def materialize(evaluation, destination, fold_id):
 
     # No whole-dataset statistics, paths, labels, or other folds enter this mount.
     public = {k: manifest[k] for k in ("target", "metric", "features", "classes", "assetColumns", "taskType")}
+    public.update({k: manifest[k] for k in ("metrics", "positiveClass") if k in manifest})
+    if CATALOG[manifest["metric"]].get("targetRequired"):
+        public["targetRequired"] = True
     if unsupervised:
         public.update({k: manifest[k] for k in ("dimensions", "reductionMode", "varianceTarget")})
         if "featureEncoding" in manifest:
@@ -605,8 +624,8 @@ def materialize(evaluation, destination, fold_id):
             if hashlib.file_digest(handle, "sha256").hexdigest() != manifest["assets"][name]["sha256"]:
                 raise ValueError("A prepared asset was modified. Start a new run.")
     if unsupervised:
-        return {"targets": [None] * len(fold["validation"]), "baseline": None}
-    return {"targets": targets, "baseline": reference_prediction(manifest["metric"], training_targets, manifest["classes"])}
+        return {"targets": targets if CATALOG[manifest["metric"]].get("targetRequired") else [None] * len(fold["validation"]), "baseline": None}
+    return {"targets": targets, "baseline": reference_prediction("log_loss" if len(manifest.get("metrics", [])) > 1 and manifest["classes"] else manifest["metric"], training_targets, manifest["classes"], manifest.get("positiveClass"))}
 
 
 if __name__ == "__main__":

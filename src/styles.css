@@ -529,3 +529,9 @@ h1 { font-family: "Source Serif 4", Georgia, serif; font-weight: 400; letter-spa
 
 .run-actions > .primary { background: var(--green); color: #223318; }
 .run-actions > .primary:hover { background: #d8eac5; }
+
+.metric-scores { width: 100%; border-collapse: collapse; margin: 22px 0 26px; font-size: 13px; }
+.metric-scores th, .metric-scores td { padding: 12px 8px; border-bottom: 1px solid var(--border); text-align: right; }
+.metric-scores th:first-child { text-align: left; font-weight: 400; }
+.metric-scores thead { color: var(--muted); font-size: 11px; }
+.metric-scores td { font-family: var(--mono); color: #d4e3c4; }

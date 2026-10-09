@@ -186,10 +186,11 @@ export async function callTool(name, args, context) {
       return {
         selectedTrial: run.best ?? null,
         selectedScore: run.score ?? null,
+        metricScores: run.metricScores ?? null,
         baseline: run.baseline ?? null,
         selectionRule: "Ablations are diagnostic. The workspace for ablation/refinement is copied from selectedTrial, even when an ablation's raw score is better.",
-        trials: run.trials.map(({ id, name, phase, status, score, detail, component, baseTrial, baseScore, impact }) => ({
-          id, name, phase, status, score, detail, component, baseTrial, baseScore, impact,
+        trials: run.trials.map(({ id, name, phase, status, score, metricScores, detail, component, baseTrial, baseScore, impact }) => ({
+          id, name, phase, status, score, metricScores, detail, component, baseTrial, baseScore, impact,
         })),
       };
     case "search_models": {

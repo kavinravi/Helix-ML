@@ -1,10 +1,11 @@
 import { realpath, lstat } from "node:fs/promises";
 import { resolve, relative, isAbsolute } from "node:path";
-import { METRICS } from "./metrics.mjs";
+import { METRICS, CATALOG, normalizeMetric, higherIsBetter } from "./metrics.mjs";
 
 export function validateTask(body) {
   if (!body || !["codex", "claude"].includes(body.agent))
     throw new Error("Select a signed-in agent.");
+  body = { ...body, metric: normalizeMetric(body.metric), ...(Array.isArray(body.metrics) ? {metrics: body.metrics.map(normalizeMetric)} : {}) };
   const learning = body.learning ?? "supervised";
   if (!["supervised", "clustering", "reduction"].includes(learning)) throw new Error("Choose supervised learning, clustering, or dimensionality reduction.");
   const reductionMode = body.reductionMode ?? "dimensions";
@@ -25,7 +26,7 @@ export function validateTask(body) {
     throw new Error("Select a dataset.");
   if (
     typeof body.target !== "string" ||
-    (learning === "supervised" && !body.target.trim()) ||
+    ((learning === "supervised" || CATALOG[body.metric]?.targetRequired) && !body.target.trim()) ||
     body.target.length > 200
   )
     throw new Error("Enter the target column.");
@@ -37,8 +38,12 @@ export function validateTask(body) {
     throw new Error("Describe the prediction task.");
   if (!METRICS.includes(body.metric))
     throw new Error("Select a supported validation metric.");
-  const metrics = learning === "clustering" ? ["silhouette", "davies_bouldin"] : learning === "reduction" ? ["trustworthiness"] : ["accuracy", "auroc", "log_loss", "rmse", "mae"];
-  if (!metrics.includes(body.metric)) throw new Error("Choose a metric for the selected learning mode.");
+  const kind=CATALOG[body.metric].kind;
+  if ((learning === "supervised" ? !["classification","regression"].includes(kind) : kind!==learning)) throw new Error("Choose a metric for the selected learning mode.");
+  const requested=body.metrics ?? [body.metric];
+  if (!Array.isArray(requested) || !requested.length || requested.length > METRICS.length || requested[0]!==body.metric || new Set(requested).size!==requested.length || requested.some(metric=>!CATALOG[metric] || CATALOG[metric].kind!==kind)) throw new Error("Choose unique metrics for the same task; the first must match the main metric.");
+  if (requested.length>1 && (learning!=="supervised" || requested.some(metric=>higherIsBetter(metric)!==higherIsBetter(body.metric)))) throw new Error("Joint optimization needs metrics with the same direction. Choose a primary objective when combining a score to maximize with a loss to minimize.");
+  if (body.positiveClass!==undefined && (typeof body.positiveClass!=="string" || !body.positiveClass.trim() || body.positiveClass.length>200 || kind!=="classification")) throw new Error("A positive class must be a label for a classification objective.");
   if (
     body.minutes !== null && (!Number.isInteger(body.minutes) ||
     body.minutes < 1 ||
@@ -122,9 +127,11 @@ export function validateTask(body) {
     learning, dimensions, reductionMode, varianceTarget, excludedColumns: excludedColumns.map(c => c.trim()),
     agent: body.agent,
     dataset: body.dataset.trim(),
-    target: learning === "supervised" ? body.target.trim() : "",
+    target: learning === "supervised" || CATALOG[body.metric].targetRequired ? body.target.trim() : "",
     objective: body.objective.trim(),
     metric: body.metric,
+    ...(requested.length > 1 ? { metrics: [...requested] } : {}),
+    ...(body.positiveClass ? { positiveClass: body.positiveClass.trim() } : {}),
     minutes: body.minutes,
     trials: body.trials,
     searchModels: body.searchModels,

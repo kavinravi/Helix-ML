@@ -1,5 +1,5 @@
 export type AgentId = "codex" | "claude";
-export type Metric = "accuracy" | "auroc" | "log_loss" | "rmse" | "mae" | "silhouette" | "davies_bouldin" | "trustworthiness";
+export type Metric = keyof typeof import("../local/metric_catalog.json");
 export type ExportFormat =
   | "native"
   | "joblib"
@@ -55,6 +55,8 @@ export interface Task {
   target: string;
   objective: string;
   metric: Metric;
+  metrics?: Metric[];
+  positiveClass?: string;
   minutes: number | null;
   trials: number | null;
   searchModels: boolean;
@@ -86,6 +88,7 @@ export interface DatasetInfo {
   warnings: string[];
 }
 export interface Trial {
+  metricScores?: Partial<Record<Metric, number>>;
   id: string;
   phase: string;
   name: string;
@@ -115,6 +118,8 @@ export interface FollowupMessage {
   childRunId?: string;
 }
 export interface Run {
+  metricScores?: Partial<Record<Metric, number>>;
+  testMetricScores?: Partial<Record<Metric, number>>;
   projection?: { kind: "clustering" | "reduction"; axes: string[]; rows: number; scope: string; dimensions?: number; cumulativeVariance?: number; clusters?: { label: number; count: number }[]; points: { row: number; x: number; y: number; cluster?: number }[] };
   messages?: FollowupMessage[];
   followup?: { parentId: string; message: string; protocolHash: string };
