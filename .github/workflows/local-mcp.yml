@@ -13,7 +13,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
-      HELIX_MCP_HOME: ${{ runner.temp }}/helix-mcp
+      HELIX_MCP_HOME: ${{ github.workspace }}/.helix/mcp-ci
       HELIX_PYTHON: python
     steps:
       - uses: actions/checkout@v4

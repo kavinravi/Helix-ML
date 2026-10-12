@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile, writeFile, access } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, access, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nativeArguments, nativeEnvironment } from "../local/native.mjs";
@@ -8,6 +8,8 @@ import { tools, validateArguments } from "./schema.mjs";
 import { setupRuntime } from "./runtime.mjs";
 import { registrationArgs, install } from "./cli.mjs";
 import { lockRunner } from "../local/lock.mjs";
+import { runProcess } from "../local/process.mjs";
+import { fileURLToPath } from "node:url";
 
 test("native paths are mapped only as path arguments, preserving spaces and inline code", () => {
   const mounts = [[join(tmpdir(), "space, dir"), "/data"]];
@@ -54,6 +56,16 @@ test("agent registration uses argument arrays and a stable installation path", (
   const path = join(tmpdir(), "name with spaces", "mcp", "cli.mjs"), home = join(tmpdir(), "my data");
   assert.deepEqual(registrationArgs("codex", path, home), ["mcp", "add", "helix", "--", process.execPath, path, "serve", "--home", home]);
   assert.deepEqual(registrationArgs("claude", path, home).slice(0, 7), ["mcp", "add", "--scope", "user", "--transport", "stdio", "helix"]);
+});
+
+test("the CLI starts through npm's executable symlink", async () => {
+  const root = await mkdtemp(join(tmpdir(), "helix-bin-test-"));
+  try {
+    let entry = fileURLToPath(new URL("cli.mjs", import.meta.url));
+    if (process.platform !== "win32") { const link = join(root, "helix"); await symlink(entry, link); entry = link; }
+    const result = await runProcess(process.execPath, [entry, "--help"]);
+    assert.match(result.output, /helix install codex\|claude/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("installer copies a complete runtime, updates its own Claude registration, and preserves edited skills", async () => {
