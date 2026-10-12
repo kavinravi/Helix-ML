@@ -47,7 +47,7 @@ Acceleration depends on the model. PyTorch models can use CUDA or MPS. GPU-capab
 
 This release targets one GPU per fit. It does not configure AMD/ROCm, distributed training or GPU-backed Railway workers. GPU fits still obey the same data splits, budgets and independent scoring. GPU memory exhaustion is reported as a failed trial; memory figures are estimates, not quotas. PyTorch exports should save CPU state dictionaries and reload on the requested device.
 
-A real RTX 5090 passed CUDA cross-validation, package reuse, final refit, export/reload and CPU inference checks. Cross-platform CI exercises the PyTorch pipeline where a current wheel exists, and tests unavailable-device rejection. Actual Apple MPS hardware and NVIDIA on Windows still need physical verification; each installation runs its own device check before enabling acceleration.
+A real RTX 5090 passed CUDA cross-validation, package reuse, final refit, export/reload and CPU inference checks. XGBoost 3.4.1 also passed CUDA training and export/reload. The Apple Silicon macOS CI runner passed the full PyTorch pipeline on MPS, including GPU tensor allocation and CPU inference of the exported model. Windows and Linux CI passed the CPU PyTorch path and unavailable-device rejection. NVIDIA on a physical Windows machine and desktop approval prompts remain unverified; each installation runs its own device check before enabling acceleration.
 
 To repair or update, download the current installer and open it again. To remove the connection, run `codex mcp remove helix` or `claude mcp remove --scope user helix`; remove the `helix-ml` folder in `~/.agents/skills` or `~/.claude/skills` to remove the companion skill. Experiments remain on disk unless you delete the state directory.
 
