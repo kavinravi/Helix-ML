@@ -32,7 +32,7 @@ export async function serve(home, runtime) {
       if (request.method === "initialize") result = {
         protocolVersion: ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"].includes(request.params?.protocolVersion) ? request.params.protocolVersion : "2025-06-18",
         capabilities: { tools: {} }, serverInfo: { name: "helix-ml-local", version: "0.4.0" },
-        instructions: "Helix runs ML experiments on this computer. Start with helix_info. Propose task, target, metrics, training device and budget before training. Create an experiment, read its status for the code contract, write candidate source using your editor, submit trials and compare measured validation scores, then finalize once. Long jobs return immediately: poll status every few seconds. Local execution has normal user permissions. Never access held-out labels or write into Helix's private state folder.",
+        instructions: "Helix runs ML experiments on this computer. Start with helix_info. Propose the task, dataset or environment, metrics, training device and budgets. For CSV tasks create_experiment returns a source-code contract: write and submit candidate source. For standard Gymnasium RL use create_rl_experiment and run_rl_trial; no CSV or source is needed. Compare measured validation scores, then finalize once on reserved rows or episode seeds. Long jobs return immediately: poll status every few seconds. Local execution has normal user permissions. Never access held-out labels/seeds or write into Helix's private state folder.",
       };
       else if (request.method === "ping") result = {};
       else if (request.method === "tools/list") result = { tools };

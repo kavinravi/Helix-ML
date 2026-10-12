@@ -60,6 +60,8 @@ test("RL accepts only standard environments and bounded, typed parameters", () =
   assert.throws(() => rlTask({...good,objective:" "}),/objective/);
   assert.throws(() => validateRlBudget({minutes:null,trials:null}),/at least one/);
   assert.throws(() => validateRlBudget({minutes:-1,trials:3}));
+  assert.throws(() => validateRlBudget({minutes:1000000000000,trials:3}));
+  assert.throws(() => validateRlBudget({minutes:null,trials:101}));
   for (const bad of [{...good,seed:-1},{...good,seed:2**32},{...good,evaluationEpisodes:1001}]) assert.throws(() => validateArguments(create,bad));
   const candidate = {runId:"id",algorithm:"PPO",totalTimesteps:1000,hyperparameters:{n_steps:64,net_arch:[32,32]}};
   validateArguments(trial,candidate);

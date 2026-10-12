@@ -18,7 +18,8 @@ export const RL_ENVIRONMENTS = {
   ...Object.fromEntries(["Ant", "HalfCheetah", "Hopper", "Humanoid", "HumanoidStandup", "InvertedDoublePendulum", "InvertedPendulum", "Pusher", "Reacher", "Swimmer", "Walker2d"].map(name => [name + "-v5", "mujoco"])),
 };
 export function validateRlBudget(task) {
-  for (const key of ["minutes", "trials"]) if (task[key] !== null && (!Number.isSafeInteger(task[key]) || task[key] < 1)) throw new Error(`${key} must be a positive integer or null.`);
+  for (const [key, max] of Object.entries({minutes:1440, trials:100}))
+    if (task[key] !== null && (!Number.isInteger(task[key]) || task[key] < 1 || task[key] > max)) throw new Error(`${key} must be an integer between 1 and ${max}, or null.`);
   if (task.minutes === null && task.trials === null) throw new Error("Keep at least one time or trial budget.");
   return task;
 }
