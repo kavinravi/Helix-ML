@@ -19,7 +19,7 @@ export async function runtimeConfig(home) {
   return { ...config, python: pythonPath(home) };
 }
 
-export async function setupRuntime(home, { allowLocalCode, report = console.error } = {}) {
+export async function setupRuntime(home, { allowLocalCode, report = console.error, uv } = {}) {
   if (!allowLocalCode) throw new Error("Local training runs generated Python with your user permissions, including file and network access. To use this trusted local mode, run again with --allow-local-code. No Docker is required.");
   const release = await lockRunner(join(home, "setup"));
   try {
@@ -30,19 +30,30 @@ export async function setupRuntime(home, { allowLocalCode, report = console.erro
       return config;
     } catch { /* Missing, changed or interrupted setup is repaired below. */ }
     await rm(join(home, "runtime.json"), { force: true });
-    let found;
-    const candidates = process.env.HELIX_PYTHON ? [[process.env.HELIX_PYTHON, []]] : process.platform === "win32" ? [["py", ["-3"]], ["python", []], ["python3", []]] : [["python3", []], ["python", []]];
-    for (const [command, prefix] of candidates) {
+    if (uv) {
+      const env = { ...process.env, UV_PYTHON_INSTALL_DIR: join(home, "interpreters"), UV_CACHE_DIR: join(home, "cache", "uv"), UV_PYTHON_INSTALL_BIN: "0", UV_PYTHON_INSTALL_REGISTRY: "0" };
+      report("Downloading Helix's private Python and preparing its environment…");
+      const progress = setInterval(() => report("Helix setup is still running. First-time downloads can take a few minutes…"), 15_000);
       try {
-        await runProcess(command, [...prefix, "-c", "import sys; assert sys.version_info >= (3,11)"], { timeout: 5000 });
-        found = [command, prefix]; break;
-      } catch { /* Try the next platform convention. */ }
+        await runProcess(uv, ["venv", "--no-config", "--managed-python", "--python", "3.12", "--seed", "--allow-existing", join(home, "python")], { env, timeout: 900_000, onLine: report });
+        report("Installing ML dependencies…");
+        await runProcess(uv, ["pip", "install", "--no-config", "--python", pythonPath(home), "-r", requirements], { env, timeout: 900_000, onLine: report });
+      } finally { clearInterval(progress); }
+    } else {
+      let found;
+      const candidates = process.env.HELIX_PYTHON ? [[process.env.HELIX_PYTHON, []]] : process.platform === "win32" ? [["py", ["-3"]], ["python", []], ["python3", []]] : [["python3", []], ["python", []]];
+      for (const [command, prefix] of candidates) {
+        try {
+          await runProcess(command, [...prefix, "-c", "import sys; assert sys.version_info >= (3,11)"], { timeout: 5000 });
+          found = [command, prefix]; break;
+        } catch { /* Try the next platform convention. */ }
+      }
+      if (!found) throw new Error("Install Python 3.11 or newer from python.org (on Windows enable the Python launcher), then rerun this command. You can also set HELIX_PYTHON to the Python executable.");
+      report("Creating Helix's Python environment…");
+      await runProcess(found[0], [...found[1], "-m", "venv", join(home, "python")], { timeout: 120_000 });
+      report("Installing ML dependencies. The first setup can take several minutes…");
+      await runProcess(pythonPath(home), ["-m", "pip", "install", "--disable-pip-version-check", "--no-input", "-r", requirements], { timeout: 900_000, onLine: report });
     }
-    if (!found) throw new Error("Install Python 3.11 or newer from python.org (on Windows enable the Python launcher), then rerun this command. You can also set HELIX_PYTHON to the Python executable.");
-    report("Creating Helix's Python environment…");
-    await runProcess(found[0], [...found[1], "-m", "venv", join(home, "python")], { timeout: 120_000 });
-    report("Installing ML dependencies. The first setup can take several minutes…");
-    await runProcess(pythonPath(home), ["-m", "pip", "install", "--disable-pip-version-check", "--no-input", "-r", requirements], { timeout: 900_000, onLine: report });
     const version = (await runProcess(pythonPath(home), ["-I", "-c", check], { timeout: 60_000 })).output.trim();
     const config = {
       kind: "native", python: pythonPath(home), pythonVersion: version, localCodeConsent: true,

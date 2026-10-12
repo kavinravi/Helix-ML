@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile, writeFile, access, symlink } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, access, symlink, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nativeArguments, nativeEnvironment } from "../local/native.mjs";
@@ -10,6 +11,7 @@ import { registrationArgs, install } from "./cli.mjs";
 import { lockRunner } from "../local/lock.mjs";
 import { runProcess } from "../local/process.mjs";
 import { fileURLToPath } from "node:url";
+import { prepareBundle, installBundle } from "./installer.mjs";
 
 test("native paths are mapped only as path arguments, preserving spaces and inline code", () => {
   const mounts = [[join(tmpdir(), "space, dir"), "/data"]];
@@ -40,6 +42,36 @@ test("MCP validates types, required values and unknown nested options", () => {
 
 test("setup requires informed local execution opt-in before creating state", async () => {
   await assert.rejects(setupRuntime(join(tmpdir(), "helix-no-consent")), /--allow-local-code/);
+  await assert.rejects(installBundle("codex", join(tmpdir(), "helix-no-consent")), /--allow-local-code/);
+});
+
+test("bundled runtimes survive download removal, repair damage, and reject wrong or corrupted downloads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "helix bundle test "));
+  const source = join(root, "download"), home = join(root, "installed");
+  const nodeName = process.platform === "win32" ? "node.exe" : "node";
+  try {
+    await mkdir(source);
+    const files = {};
+    for (const name of [nodeName, process.platform === "win32" ? "uv.exe" : "uv", "NODE-LICENSE.txt", "UV-LICENSE-MIT.txt", "UV-LICENSE-APACHE.txt"]) {
+      await writeFile(join(source, name), name);
+      files[name] = createHash("sha256").update(name).digest("hex");
+    }
+    const manifest = { platform: process.platform, arch: process.arch, files };
+    const save = data => writeFile(join(source, "manifest.json"), JSON.stringify(data));
+    await save(manifest);
+    const runtime = await prepareBundle(home, source);
+    assert.ok(runtime.node.startsWith(join(home, "runtimes")));
+    await writeFile(runtime.node, "damaged installed binary");
+    assert.deepEqual(await prepareBundle(home, source), runtime);
+    assert.equal(await readFile(runtime.node, "utf8"), nodeName);
+    await save({ ...manifest, arch: "wrong" });
+    await assert.rejects(prepareBundle(home, source), /This download is for/);
+    await save(manifest);
+    await writeFile(join(source, nodeName), "corrupt download");
+    await assert.rejects(prepareBundle(home, source), /integrity check/);
+    await rm(source, { recursive: true });
+    assert.equal(await readFile(runtime.node, "utf8"), nodeName);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("exclusive compute lock prevents two clients writing one experiment and releases", async () => {

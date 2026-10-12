@@ -6,19 +6,24 @@ Run ML experiments with your own Codex or Claude Code subscription. Upload data,
 
 Helix can also run inside your existing **Codex or Claude Code** session. Your agent writes candidates and calls Helix's local tools; your computer does the training and evaluation. No Helix account, Railway worker, pairing code, second agent login or API key is needed. Your normal agent subscription still supplies the language model.
 
-Install Node.js **22.13+**, Python **3.11+**, and your chosen agent CLI. Python 3.12 is the tested baseline. Then run one command in Terminal or PowerShell:
+Download the installer for your computer. **You do not need to install Node, Python or Docker.** Your chosen Codex or Claude Code CLI must already be installed and signed in.
 
-```sh
-# Codex
-npx --yes --allow-remote=root --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix install codex --allow-local-code
+| Computer | Download |
+| --- | --- |
+| Mac with Apple Silicon (M1 or newer) | [Mac Apple Silicon](https://github.com/kavinravi/Helix-ML/releases/download/v0.2.1/helix-mcp-macos-arm64.zip) |
+| Mac with Intel | [Mac Intel](https://github.com/kavinravi/Helix-ML/releases/download/v0.2.1/helix-mcp-macos-x64.zip) |
+| Windows (Intel/AMD, 64-bit) | [Windows](https://github.com/kavinravi/Helix-ML/releases/download/v0.2.1/helix-mcp-windows-x64.zip) |
+| Linux (Intel/AMD, 64-bit) | [Linux](https://github.com/kavinravi/Helix-ML/releases/download/v0.2.1/helix-mcp-linux-x64.zip) |
 
-# Or Claude Code
-npx --yes --allow-remote=root --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix install claude --allow-local-code
-```
+1. Extract the ZIP, then open **Install Helix** (`.command` on Mac, `.cmd` on Windows, `.sh` on Linux).
+2. Choose Codex or Claude Code and accept local execution. Keep the window open while setup finishes.
+3. Restart your agent session and ask it to use Helix on your dataset.
 
-The installer creates a private Python environment, installs ML dependencies, registers the MCP server, and installs the Helix workflow skill. Its files are copied out of npm's temporary cache. Restart your agent session after installation. The package comes directly from [GitHub releases](https://github.com/kavinravi/Helix-ML/releases); Git is not required. `--allow-remote=root` permits this requested tarball on npm 12 without changing global npm settings ([npm documentation](https://docs.npmjs.com/using-npm/config/#allow-remote)).
+Node is bundled. The installer uses [uv](https://docs.astral.sh/uv/guides/install-python/) to download a private Python 3.12 and install the ML packages automatically; the first setup needs internet and can take a few minutes. It registers the MCP server and installs the companion workflow skill. It doesn't require administrator access or change system Python, shell profiles or the global PATH. Once installation finishes, you can delete the downloaded folder: the connection uses Helix's permanent runtime copy. Reopening the installer repairs or updates it while keeping saved experiments.
 
-**Local execution:** `--allow-local-code` acknowledges that generated Python runs with your user permissions, including file and network access. A virtual environment isolates dependencies; it does not sandbox code. Only run candidates you trust. Helix omits validation labels from the normal training inputs and independently computes scores, but native mode cannot protect evaluation files from deliberately hostile code. It strips inherited credentials from training subprocess environments; this does not prevent access to credentials stored on disk.
+These preview installers are unsigned, so macOS or Windows may require approval before opening. Linux users may need to run `bash "Install Helix.sh"` from the extracted folder. Checksums are included on the [release page](https://github.com/kavinravi/Helix-ML/releases/tag/v0.2.1).
+
+**Local execution:** accepting the installer prompt (or passing `--allow-local-code` in the CLI) acknowledges that generated Python runs with your user permissions, including file and network access. A virtual environment isolates dependencies; it does not sandbox code. Only run candidates you trust. Helix omits validation labels from the normal training inputs and independently computes scores, but native mode cannot protect evaluation files from deliberately hostile code. It strips inherited credentials from training subprocess environments; this does not prevent access to credentials stored on disk.
 
 Example request:
 
@@ -32,16 +37,23 @@ The agent returns a local solution ZIP containing source, the reload-verified mo
 
 Files live in `~/.helix-ml/mcp` (`%USERPROFILE%\.helix-ml\mcp` on Windows). Each experiment gets separate source snapshots and dependency directories. One compute job runs at a time across connected sessions. The default CPU thread count leaves one logical core free; memory estimates use half of physical RAM, capped at 64 GiB. These are planning limits, not hard resource quotas. NVIDIA/CUDA and Apple MPS acceleration are not configured or validated in this release.
 
-To diagnose or update:
+To repair or update, download the current installer and open it again. To remove the connection, run `codex mcp remove helix` or `claude mcp remove --scope user helix`; remove the `helix-ml` folder in `~/.agents/skills` or `~/.claude/skills` to remove the companion skill. Experiments remain on disk unless you delete the state directory.
+
+<details>
+<summary>Advanced: source checkout or npm installation</summary>
+
+If you already manage your own Node.js 22.13+ and Python 3.11+, the smaller npm package remains available:
 
 ```sh
-npx --yes --allow-remote=root --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix doctor
-# Update by rerunning the install command, then restarting your agent.
+npx --yes --allow-remote=root --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.1/helix-mcp.tgz helix install codex --allow-local-code
+# Replace codex with claude for Claude Code, or use `helix doctor` to diagnose.
 ```
 
-From a source checkout, use `node mcp/cli.mjs` instead of the `npx … helix` prefix. No frontend build or npm dependency installation is needed for MCP. Override the state directory with `--home`, or select a Python executable with `HELIX_PYTHON`. To remove the connection, run `codex mcp remove helix` or `claude mcp remove --scope user helix`; remove the `helix-ml` folder in `~/.agents/skills` or `~/.claude/skills` to remove the companion skill. Experiments remain on disk unless you delete the state directory.
+From a source checkout, use `node mcp/cli.mjs` instead of the `npx … helix` prefix. No frontend build or npm dependency installation is needed for MCP. Override the state directory with `--home`, or select a Python executable with `HELIX_PYTHON`. The runtime-inclusive installer always provisions its own Python for a fresh setup. Build its platform ZIPs with `python mcp/package.py` (current platform) or `python mcp/package.py --all`. Downloads use pinned Node/uv versions and checksums; redistribution licenses are included.
 
-MCP registration follows the official [Codex](https://developers.openai.com/codex/mcp) and [Claude Code](https://code.claude.com/docs/en/mcp) CLI interfaces. The [local MCP CI workflow](.github/workflows/local-mcp.yml) runs real CPU fits, exports and cancellation checks on Linux, macOS and Windows; physical Mac/Windows agent installation still needs user testing.
+</details>
+
+MCP registration follows the official [Codex](https://developers.openai.com/codex/mcp) and [Claude Code](https://code.claude.com/docs/en/mcp) CLI interfaces. The [local MCP CI workflow](.github/workflows/local-mcp.yml) builds these installers and tests setup without system Python/Node, repeat installation, independent runtime paths, real CPU fits, exports and cancellation on Linux, macOS (Intel and Apple Silicon) and Windows. Physical desktop opening and OS approval prompts still need user testing.
 
 ## Open in your browser
 

@@ -9,21 +9,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
-      HELIX_MCP_HOME: ${{ github.workspace }}/.helix/mcp-ci
-      HELIX_PYTHON: python
+      HELIX_MCP_HOME: ${{ github.workspace }}/.helix/mcp ci
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: node --test mcp/check.test.mjs
-      - run: node mcp/cli.mjs setup --allow-local-code
-      - run: node mcp/cli.mjs doctor
-      - run: node mcp/runtime_check.mjs
+      - run: python mcp/package.py
+      - name: Test downloaded bundle with private runtimes
+        shell: bash
+        run: |
+          bundle=$(find output/mcp -mindepth 2 -maxdepth 2 -type d -name 'Helix ML' -print -quit)
+          node="$bundle/runtime/node"
+          if [ -f "$node.exe" ]; then node="$node.exe"; fi
+          "$node" --test "$bundle/mcp/check.test.mjs"
+          "$node" "$bundle/mcp/bundle_check.mjs"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: output/mcp/helix-mcp-*.zip
+          if-no-files-found: error

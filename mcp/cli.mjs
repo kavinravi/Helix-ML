@@ -21,11 +21,11 @@ Local generated code runs with your user permissions, including file/network acc
 --home <directory> overrides ~/.helix-ml/mcp (or HELIX_MCP_HOME).
 `;
 
-export function registrationArgs(client, entry, home) {
-  return ["mcp", "add", ...(client === "claude" ? ["--scope", "user", "--transport", "stdio"] : []), "helix", "--", process.execPath, entry, "serve", "--home", home];
+export function registrationArgs(client, entry, home, node = process.execPath) {
+  return ["mcp", "add", ...(client === "claude" ? ["--scope", "user", "--transport", "stdio"] : []), "helix", "--", node, entry, "serve", "--home", home];
 }
 
-async function invokeClient(client, args) {
+export async function invokeClient(client, args) {
   if (process.platform === "win32") {
     // PowerShell invokes npm's .cmd shims; literal quoting preserves spaces and metacharacters.
     const literal = value => "'" + value.replaceAll("'", "''") + "'";
@@ -35,7 +35,7 @@ async function invokeClient(client, args) {
   return runProcess(client, args, { timeout: 30_000, onLine: console.error });
 }
 
-export async function install(client, home, { runClient = invokeClient, skillRoot = join(homedir(), client === "codex" ? ".agents" : ".claude", "skills") } = {}) {
+export async function install(client, home, { runClient = invokeClient, node = process.execPath, skillRoot = join(homedir(), client === "codex" ? ".agents" : ".claude", "skills") } = {}) {
   if (!["codex", "claude"].includes(client)) throw new Error("Choose helix install codex or helix install claude.");
   // Copy out of npm's temporary cache; a cache purge must not break agent registration.
   const files = [];
@@ -52,7 +52,7 @@ export async function install(client, home, { runClient = invokeClient, skillRoo
     await mkdir(dirname(join(app, file)), { recursive: true });
     await cp(join(project, file), join(app, file));
   }
-  const args = registrationArgs(client, join(app, "mcp", "cli.mjs"), home);
+  const args = registrationArgs(client, join(app, "mcp", "cli.mjs"), home, node);
   const receipt = join(home, `${client}-registration.json`);
   const previous = await readFile(receipt, "utf8").then(JSON.parse).catch(error => { if (error.code === "ENOENT") return null; throw error; });
   // Claude refuses replacement entries. Remove only a registration made by this installer.
