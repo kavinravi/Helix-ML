@@ -112,7 +112,7 @@ export async function createMcpService(home, runtime) {
       if (!isAbsolute(args.dataset)) throw new Error("Use an absolute dataset path.");
       const dataset = await realpath(args.dataset);
       if (!(await lstat(dataset)).isFile() || !dataset.toLowerCase().endsWith(".csv")) throw new Error("Choose a local CSV file.");
-      if (within(await realpath(home), dataset)) throw new Error("Choose the original dataset outside Helix's private state directory.");
+      if (within(await realpath(root), dataset)) throw new Error("Choose the original dataset outside Helix's private experiment directory.");
       const policy = { augmentation: false, regularization: true, features: true, tuning: true, pretrained: false, ensemble: false, ...args.policy };
       const task = validateTask({ ...defaults, ...args, dataset, policy, searchModels: !args.model });
       const run = await createRun(root, task);

@@ -7,6 +7,7 @@ import { once } from "node:events";
 import { tmpdir, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { runProcess } from "../local/process.mjs";
 import { runtimeConfig } from "./runtime.mjs";
@@ -14,6 +15,7 @@ import { runtimeConfig } from "./runtime.mjs";
 const home = resolve(process.env.HELIX_MCP_HOME || join(homedir(), ".helix-ml", "mcp"));
 const runtime = await runtimeConfig(home);
 const temp = await mkdtemp(join(tmpdir(), "helix mcp check,"));
+const packagedExample = join(home, "app", "test-" + randomUUID(), "examples", "data.csv");
 const entry = fileURLToPath(new URL("cli.mjs", import.meta.url));
 let child, sequence = 0, pending, errors;
 function connect() {
@@ -105,6 +107,8 @@ try {
   const source = join(temp, "source"), dataset = join(temp, "data.csv");
   await mkdir(source);
   await writeFile(dataset, "a,b,c,d,label,y\n" + Array.from({ length: 150 }, (_, i) => `${i%3*8+Math.sin(i)},${i%3*6+Math.cos(i)},${Math.sin(i*3)},${i%3*5+Math.cos(i*2)},${i%2?'yes':'no'},${i%3*4+Math.sin(i)}`).join("\n"));
+  await mkdir(join(packagedExample, ".."), { recursive: true });
+  await writeFile(packagedExample, await readFile(dataset));
   await writeFile(join(source, "train.py"), train); await writeFile(join(source, "predict.py"), predict);
   await writeFile(join(source, "plan.json"), JSON.stringify({ component: "baseline", change: "fit one estimator", rationale: "integration test", modelFamily: "test fixture", strategies: { augmentation: false, regularization: false, features: false, tuning: false, pretrained: false, ensemble: false } }));
   await runProcess(runtime.python, [fileURLToPath(new URL('../local/metrics_check.py', import.meta.url))], { timeout: 120_000 });
@@ -125,7 +129,7 @@ try {
   for (const scenario of scenarios) {
     // AST restrictions apply to all source branches, so omit model-specific unused branches for PCA.
     if (scenario.model === "PCA") await writeFile(join(source, "train.py"), train.replace("KMeans(n_clusters=3,n_init=2,random_state=int(a.seed))", "PCA(n_components=2)").replace("DecisionTreeClassifier(random_state=int(a.seed))", "PCA(n_components=2)").replace("DecisionTreeRegressor(random_state=int(a.seed))", "PCA(n_components=2)"));
-    const { runId } = await call("create_experiment", { dataset, objective: `Test ${scenario.metric}`, minutes: 10, trials: 2, ...scenario }); ids.push(runId);
+    const { runId } = await call("create_experiment", { dataset: scenario.metrics ? packagedExample : dataset, objective: `Test ${scenario.metric}`, minutes: 10, trials: 2, ...scenario }); ids.push(runId);
     let state = await settled(runId); assert.equal(state.status, "ready", state.error);
     state = await call("status", { runId, details: true });
     assert.match(state.contract, /trusted native/);
@@ -160,4 +164,5 @@ try {
   delete process.env.HELIX_SECRET_TEST;
   for (const id of ids) await rm(join(home, "experiments", id), { recursive: true, force: true });
   await rm(temp, { recursive: true, force: true });
+  await rm(join(packagedExample, "..", ".."), { recursive: true, force: true });
 }
