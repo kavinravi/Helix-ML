@@ -10,13 +10,13 @@ Install Node.js **22.13+**, Python **3.11+**, and your chosen agent CLI. Python 
 
 ```sh
 # Codex
-npx --yes --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix install codex --allow-local-code
+npx --yes --allow-remote=root --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix install codex --allow-local-code
 
 # Or Claude Code
-npx --yes --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix install claude --allow-local-code
+npx --yes --allow-remote=root --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix install claude --allow-local-code
 ```
 
-The installer creates a private Python environment, installs ML dependencies, registers the MCP server, and installs the Helix workflow skill. Its files are copied out of npm's temporary cache. Restart your agent session after installation. The package comes directly from [GitHub releases](https://github.com/kavinravi/Helix-ML/releases); Git is not required.
+The installer creates a private Python environment, installs ML dependencies, registers the MCP server, and installs the Helix workflow skill. Its files are copied out of npm's temporary cache. Restart your agent session after installation. The package comes directly from [GitHub releases](https://github.com/kavinravi/Helix-ML/releases); Git is not required. `--allow-remote=root` permits this requested tarball on npm 12 without changing global npm settings ([npm documentation](https://docs.npmjs.com/using-npm/config/#allow-remote)).
 
 **Local execution:** `--allow-local-code` acknowledges that generated Python runs with your user permissions, including file and network access. A virtual environment isolates dependencies; it does not sandbox code. Only run candidates you trust. Helix omits validation labels from the normal training inputs and independently computes scores, but native mode cannot protect evaluation files from deliberately hostile code. It strips inherited credentials from training subprocess environments; this does not prevent access to credentials stored on disk.
 
@@ -35,7 +35,7 @@ Files live in `~/.helix-ml/mcp` (`%USERPROFILE%\.helix-ml\mcp` on Windows). Each
 To diagnose or update:
 
 ```sh
-npx --yes --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix doctor
+npx --yes --allow-remote=root --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix doctor
 # Update by rerunning the install command, then restarting your agent.
 ```
 
