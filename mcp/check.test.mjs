@@ -80,6 +80,7 @@ test("training gets declared imports and no inherited credentials; scorer gets n
   const runtime = { python: join(tmpdir(), "venv", "python"), cpus: 2, memoryMiB: 1024 };
   const env = nativeEnvironment(runtime, tmpdir(), [["source", "/code"], ["extras", "/packages"]]);
   assert.equal(env.HELIX_TEST_SECRET, undefined);
+  assert.equal(env.PYTHONUTF8, "1");
   assert.equal(env.HELIX_SOURCE, "source");
   assert.match(env.PYTHONPATH, /source/);
   const scorer = nativeEnvironment(runtime, tmpdir(), [["harness", "/harness"], ["results", "/work"]]);

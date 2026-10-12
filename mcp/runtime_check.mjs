@@ -54,7 +54,8 @@ async function settled(runId) {
 }
 async function disconnect() { const exited = once(child, "exit"); child.stdin.end(); await exited; }
 
-const train = `import argparse, json, joblib, os
+const train = `# Unicode source: café, δοκιμή, 测试
+import argparse, json, joblib, os
 from pathlib import Path
 import pandas as pd
 from sklearn.pipeline import make_pipeline
@@ -138,7 +139,7 @@ try {
   for (const scenario of scenarios) {
     // AST restrictions apply to all source branches, so omit model-specific unused branches for PCA.
     if (scenario.model === "PCA") await writeFile(join(source, "train.py"), train.replace("KMeans(n_clusters=3,n_init=2,random_state=int(a.seed))", "PCA(n_components=2)").replace("DecisionTreeClassifier(random_state=int(a.seed))", "PCA(n_components=2)").replace("DecisionTreeRegressor(random_state=int(a.seed))", "PCA(n_components=2)"));
-    const { runId } = await call("create_experiment", { dataset: scenario.metrics ? packagedExample : dataset, objective: `Test ${scenario.metric}`, minutes: 10, trials: 2, ...scenario }); ids.push(runId);
+    const { runId } = await call("create_experiment", { dataset: scenario.metrics ? packagedExample : dataset, objective: `Test ${scenario.metric} · δοκιμή · 测试`, minutes: 10, trials: 2, ...scenario }); ids.push(runId);
     let state = await settled(runId); assert.equal(state.status, "ready", state.error);
     state = await call("status", { runId, details: true });
     assert.match(state.contract, /trusted native/);

@@ -14,7 +14,7 @@ export function nativeEnvironment(runtime, temporary, mounts) {
   env.PATH = dirname(runtime.python) + delimiter + (process.env.PATH || process.env.Path || "");
   Object.assign(env, {
     HOME: temporary, USERPROFILE: temporary, TMP: temporary, TEMP: temporary, TMPDIR: temporary,
-    PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1",
+    PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONUTF8: "1",
     HELIX_TRAIN_MEMORY_MB: String(runtime.memoryMiB),
     OMP_NUM_THREADS: String(runtime.cpus), OPENBLAS_NUM_THREADS: String(runtime.cpus),
     MKL_NUM_THREADS: String(runtime.cpus), NUMBA_NUM_THREADS: String(runtime.cpus),

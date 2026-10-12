@@ -22,6 +22,7 @@ export async function createMcpService(home, runtime) {
   await mkdir(root, { recursive: true, mode: 0o700 });
   // Only this dedicated MCP process uses native execution; the web runner retains Docker.
   process.env.HELIX_PYTHON = runtime.python;
+  process.env.PYTHONUTF8 = "1";
   process.env.HELIX_TRAIN_MEMORY_MB = String(runtime.memoryMiB);
   process.env.HELIX_PREP_MEMORY_MB = String(runtime.memoryMiB);
   const jobs = new Map();

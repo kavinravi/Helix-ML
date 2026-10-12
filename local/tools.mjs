@@ -317,7 +317,7 @@ if os.environ.get('HELIX_TORCH_VERSION'):
     pip += ['--constraint', constraints]
 report = os.path.join(tempfile.gettempdir(), 'install-plan.json')
 subprocess.run(pip + ['--dry-run', '--report', report] + sys.argv[1:], check=True)
-with open(report) as f: plan = json.load(f)['install']
+with open(report, encoding='utf-8') as f: plan = json.load(f)['install']
 requirements = [entry['metadata']['name'] + '==' + entry['metadata']['version'] for entry in plan]
 if requirements:
     subprocess.run(pip + ['--no-deps', '--upgrade', '--target', os.environ.get('HELIX_PACKAGES', '/packages')] + requirements + sys.argv[2:], check=True)
