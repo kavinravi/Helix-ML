@@ -37,7 +37,8 @@ export async function createMcpService(home, runtime) {
   };
   const context = (run, device = run.environment.device || "cpu") => ({ root, runId: run.id, runtime: { ...runtime, device }, deadline: run.deadline, models: join(folder(run.id), "models"), runFile: join(folder(run.id), "run.json"), onProgress: line => log(run, "system", line) });
   const view = async (run, details = false) => {
-    let status = run.status;
+    // Completion is visible only after persistence and the shared compute lock are released.
+    let status = jobs.has(run.id) ? "running" : run.status;
     if (status === "running" && run.ownerPid) {
       try { process.kill(run.ownerPid, 0); } catch (error) { if (error.code === "ESRCH") status = "interrupted"; }
     }
@@ -78,7 +79,9 @@ export async function createMcpService(home, runtime) {
       catch (error) { run.status = controller.signal.aborted ? "paused" : "error"; run.error = redact(error.message); log(run, "error", run.error); }
       finally {
         clearInterval(heartbeat); delete run.ownerPid;
-        try { await saveRun(root, run); } finally { jobs.delete(id); await release(); }
+        try { await saveRun(root, run); } finally {
+          try { await release(); } finally { jobs.delete(id); }
+        }
       }
     })();
     // Persisting a job failure must not become an unhandled promise rejection.
