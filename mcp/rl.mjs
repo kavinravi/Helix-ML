@@ -13,7 +13,7 @@ export const RL_VERSIONS = { "stable-baselines3": "2.9.0", gymnasium: "1.4.0" };
 export const RL_ENVIRONMENTS = {
   "CartPole-v1": "classic-control", "MountainCar-v0": "classic-control", "MountainCarContinuous-v0": "classic-control",
   "Pendulum-v1": "classic-control", "Acrobot-v1": "classic-control",
-  "FrozenLake-v1": "toy-text", "Taxi-v3": "toy-text", "CliffWalking-v1": "toy-text", "Blackjack-v1": "toy-text",
+  "FrozenLake-v1": "toy-text", "Taxi-v4": "toy-text", "CliffWalking-v1": "toy-text", "Blackjack-v1": "toy-text",
   "LunarLander-v3": "box2d", "BipedalWalker-v3": "box2d", "CarRacing-v3": "box2d",
   ...Object.fromEntries(["Ant", "HalfCheetah", "Hopper", "Humanoid", "HumanoidStandup", "InvertedDoublePendulum", "InvertedPendulum", "Pusher", "Reacher", "Swimmer", "Walker2d"].map(name => [name + "-v5", "mujoco"])),
 };

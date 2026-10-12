@@ -7,6 +7,7 @@ import { runtimeConfig } from './runtime.mjs';
 import { createMcpService } from './service.mjs';
 import { runProcess } from '../local/process.mjs';
 import { container } from '../local/runtime.mjs';
+import { RL_ENVIRONMENTS } from './rl.mjs';
 
 const home = resolve(process.env.HELIX_MCP_HOME || join(homedir(), '.helix-ml', 'mcp'));
 const runtime = await runtimeConfig(home);
@@ -30,6 +31,7 @@ try {
     const {runId} = await call('create_rl_experiment', {envId,objective:'Check actual SB3 training and evaluation',device:process.env.HELIX_TEST_DEVICE || 'cpu',minutes:15,trials:5,evaluationEpisodes:2,maxEpisodeSteps:100});
     ids.push(runId); console.log('Checking RL:', envId, runId);
     let state = await settled(runId);
+    await container({runtime:{...runtime,device:'cpu'},deadline:Date.now()+30000}, ['python','-c', "import sys,json,gymnasium as gym; missing=set(json.loads(sys.argv[1]))-gym.registry.keys(); assert not missing, missing",JSON.stringify(Object.keys(RL_ENVIRONMENTS))], {mounts:[[join(home,'experiments',runId,'dependencies','rl'),'/packages']]});
     assert.ok(state.contract.includes('helix_run_rl_trial'));
     assert.equal(state.environment.maxEpisodeSteps,100);
     assert.equal(state.testScore, undefined);
