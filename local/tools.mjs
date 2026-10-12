@@ -22,6 +22,7 @@ const packages = [
   "sentence-transformers",
   "lightgbm",
   "xgboost",
+  "xgboost-cu12",
   "catboost",
   "librosa",
   "soundfile",
@@ -142,6 +143,12 @@ function repository(value) {
   )
     throw new Error("Use an owner/repository identifier.");
   return value;
+}
+
+export function torchPackageOptions(name, runtime) {
+  if (!["torch", "torchvision", "torchaudio"].includes(name)) return [];
+  if (runtime?.kind === "native" && process.platform === "darwin") return [];
+  return ["--index-url", runtime?.kind === "native" && runtime.compute?.torchIndex || "https://download.pytorch.org/whl/cpu"];
 }
 
 export async function callTool(name, args, context) {
@@ -268,13 +275,15 @@ export async function callTool(name, args, context) {
       if (typeof args.version !== "string" || !/^\d+(?:\.\d+)*(?:[a-z]+\d*)?$/.test(args.version))
         throw new Error("Choose an exact package version, such as 1.7.2.");
       await mkdir(context.packages, { recursive: true });
-      const extra = ["torch", "torchvision", "torchaudio"].includes(args.name)
-        ? ["--index-url", "https://download.pytorch.org/whl/cpu"]
-        : [];
+      const extra = torchPackageOptions(args.name, context.runtime);
       // Resolve against the runtime first: --target alone reinstalls every dependency,
       // wasting the bounded /tmp filesystem even when NumPy/SciPy are already present.
       const installer = `import json, subprocess, sys, os, tempfile
 pip = [sys.executable, '-m', 'pip', 'install', '--no-cache-dir']
+if os.environ.get('HELIX_TORCH_VERSION'):
+    constraints = os.path.join(tempfile.gettempdir(), 'helix-torch-constraint.txt')
+    with open(constraints, 'w') as f: f.write('torch==' + os.environ['HELIX_TORCH_VERSION'] + '\\n')
+    pip += ['--constraint', constraints]
 report = os.path.join(tempfile.gettempdir(), 'install-plan.json')
 subprocess.run(pip + ['--dry-run', '--report', report] + sys.argv[1:], check=True)
 with open(report) as f: plan = json.load(f)['install']

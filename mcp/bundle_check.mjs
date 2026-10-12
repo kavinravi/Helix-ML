@@ -37,7 +37,7 @@ assert.equal(await readFile(marker, "utf8"), "preserve existing experiments");
 for (const dir of ["mcp", "local", "examples"]) await rename(join(bundle, dir), join(bundle, dir + "-unavailable"));
 try {
   const doctor = await runProcess(node, [entry, "doctor", "--home", home], { timeout: 60_000 });
-  assert.match(doctor.output, /Ready for local CPU training/);
+  assert.match(doctor.output, /Ready for local (CPU|CUDA|MPS) training/);
   process.env.PATH = originalPath;
   await runProcess(node, [join(dirname(entry), "runtime_check.mjs")], { timeout: 600_000, onLine: console.log });
 } finally {

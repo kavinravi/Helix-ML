@@ -112,6 +112,7 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
         metrics: run.task.metrics || [run.task.metric], positiveClass: metadata.positiveClass,
         model: run.task.model, searchModels: run.task.searchModels,
         exportModel: run.task.exportModel, exportFormat: run.task.exportFormat,
+        device: runtime?.device || "cpu",
       };
       await writeFile(join(data, "config.json"), JSON.stringify(config), { mode: 0o600 });
       onEvent("training", `Evaluating ${fold.id}: ${fold.train.length} training rows, ${fold.validation.length} evaluation rows.`);
@@ -182,6 +183,7 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
       const checkedScore = unsupervised ? measured.score : supervised.score;
       const score = unscoredRefit ? null : checkedScore;
       const result = { id: fold.id, seed: fold.seed, fold: fold.fold, trainingRows: fold.train.length,
+        device: runtime?.device || "cpu",
         validationRows: fold.validation.length, score, baselineScore: unscoredRefit ? null : baselineScore, duration: (Date.now() - started) / 1000,
         ...(!unscoredRefit && supervised ? { metricScores: supervised.metricScores } : {}),
         ...(measured ? { scoringRows: measured.scoringRows, ...(measured.dimensions !== undefined ? { dimensions: measured.dimensions } : {}), ...(measured.cumulativeVariance !== undefined ? { cumulativeVariance: measured.cumulativeVariance } : {}) } : {}) };

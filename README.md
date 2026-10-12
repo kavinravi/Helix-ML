@@ -10,10 +10,10 @@ Download the installer for your computer. **You do not need to install Node, Pyt
 
 | Computer | Download |
 | --- | --- |
-| Mac with Apple Silicon (M1 or newer) | [Mac Apple Silicon](https://github.com/kavinravi/Helix-ML/releases/download/v0.2.1/helix-mcp-macos-arm64.zip) |
-| Mac with Intel | [Mac Intel](https://github.com/kavinravi/Helix-ML/releases/download/v0.2.1/helix-mcp-macos-x64.zip) |
-| Windows (Intel/AMD, 64-bit) | [Windows](https://github.com/kavinravi/Helix-ML/releases/download/v0.2.1/helix-mcp-windows-x64.zip) |
-| Linux (Intel/AMD, 64-bit) | [Linux](https://github.com/kavinravi/Helix-ML/releases/download/v0.2.1/helix-mcp-linux-x64.zip) |
+| Mac with Apple Silicon (M1 or newer) | [Mac Apple Silicon](https://github.com/kavinravi/Helix-ML/releases/download/v0.3.0/helix-mcp-macos-arm64.zip) |
+| Mac with Intel | [Mac Intel](https://github.com/kavinravi/Helix-ML/releases/download/v0.3.0/helix-mcp-macos-x64.zip) |
+| Windows (Intel/AMD, 64-bit) | [Windows](https://github.com/kavinravi/Helix-ML/releases/download/v0.3.0/helix-mcp-windows-x64.zip) |
+| Linux (Intel/AMD, 64-bit) | [Linux](https://github.com/kavinravi/Helix-ML/releases/download/v0.3.0/helix-mcp-linux-x64.zip) |
 
 1. Extract the ZIP, then open **Install Helix** (`.command` on Mac, `.cmd` on Windows, `.sh` on Linux).
 2. Choose Codex or Claude Code and accept local execution. Keep the window open while setup finishes.
@@ -21,7 +21,7 @@ Download the installer for your computer. **You do not need to install Node, Pyt
 
 Node is bundled. The installer uses [uv](https://docs.astral.sh/uv/guides/install-python/) to download a private Python 3.12 and install the ML packages automatically; the first setup needs internet and can take a few minutes. It registers the MCP server and installs the companion workflow skill. It doesn't require administrator access or change system Python, shell profiles or the global PATH. Once installation finishes, you can delete the downloaded folder: the connection uses Helix's permanent runtime copy. Reopening the installer repairs or updates it while keeping saved experiments.
 
-These preview installers are unsigned, so macOS or Windows may require approval before opening. Linux users may need to run `bash "Install Helix.sh"` from the extracted folder. Checksums are included on the [release page](https://github.com/kavinravi/Helix-ML/releases/tag/v0.2.1).
+These preview installers are unsigned, so macOS or Windows may require approval before opening. Linux users may need to run `bash "Install Helix.sh"` from the extracted folder. Checksums are included on the [release page](https://github.com/kavinravi/Helix-ML/releases/tag/v0.3.0).
 
 **Local execution:** accepting the installer prompt (or passing `--allow-local-code` in the CLI) acknowledges that generated Python runs with your user permissions, including file and network access. A virtual environment isolates dependencies; it does not sandbox code. Only run candidates you trust. Helix omits validation labels from the normal training inputs and independently computes scores, but native mode cannot protect evaluation files from deliberately hostile code. It strips inherited credentials from training subprocess environments; this does not prevent access to credentials stored on disk.
 
@@ -35,7 +35,19 @@ Trials run as background jobs. Ask for progress or cancellation, or ask to exten
 
 The agent returns a local solution ZIP containing source, the reload-verified model when requested, the protocol, measured metrics, an environment record and dependency versions. Reduction/clustering exports also contain representations and projection data; iterative models can supply measured training curves. No raw dataset is bundled. Results stay local and are not synced to the Railway website. Your agent may send tool results or files it reads to its provider, according to the agent's configuration.
 
-Files live in `~/.helix-ml/mcp` (`%USERPROFILE%\.helix-ml\mcp` on Windows). Each experiment gets separate source snapshots and dependency directories. One compute job runs at a time across connected sessions. The default CPU thread count leaves one logical core free; memory estimates use half of physical RAM, capped at 64 GiB. These are planning limits, not hard resource quotas. NVIDIA/CUDA and Apple MPS acceleration are not configured or validated in this release.
+Files live in `~/.helix-ml/mcp` (`%USERPROFILE%\.helix-ml\mcp` on Windows). Each experiment gets separate source snapshots and dependency directories. One compute job runs at a time across connected sessions. The default CPU thread count leaves one logical core free; memory estimates use half of physical RAM, capped at 64 GiB. These are planning limits, not hard resource quotas. GPU memory is reported separately. NVIDIA/CUDA and Apple MPS support are described below.
+
+### Local GPU support
+
+Reopen the current installer to enable GPU support, then restart your agent. Helix detects compatible hardware, installs the appropriate PyTorch build, and verifies a small forward/backward calculation. The first NVIDIA setup can download several GB. You need a working NVIDIA driver; Helix installs the runtime libraries without a separate CUDA Toolkit installation. Apple Silicon uses MPS on macOS 14 or newer. See the upstream [PyTorch builds](https://pytorch.org/get-started/previous-versions/) and [MPS requirements](https://docs.pytorch.org/docs/2.14/notes/mps.html).
+
+Ask your agent, for example: **“Use Helix to train a PyTorch classifier on CUDA and compare ROC-AUC and F1.”** For an Apple GPU, ask for MPS. `helix_info` shows the currently verified devices, GPU memory, framework version and any setup problems. The default `device="auto"` prefers a verified GPU; each candidate declares its training device. Explicit `cuda`, `mps` or `cpu` experiments must keep that device. An unavailable requested GPU produces an error instead of silently switching to CPU.
+
+Acceleration depends on the model. PyTorch models can use CUDA or MPS. GPU-capable XGBoost uses CUDA, not MPS. Ordinary scikit-learn, sklearn PCA and UMAP remain CPU models; the agent chooses `cpu` for those in an auto experiment. Additional packages reuse the installed PyTorch build so a dependency cannot silently replace it with the wrong variant. Fit configurations, trial results and exported experiments record the selected device and checked hardware. These are device selections, not GPU utilization measurements.
+
+This release targets one GPU per fit. It does not configure AMD/ROCm, distributed training or GPU-backed Railway workers. GPU fits still obey the same data splits, budgets and independent scoring. GPU memory exhaustion is reported as a failed trial; memory figures are estimates, not quotas. PyTorch exports should save CPU state dictionaries and reload on the requested device.
+
+A real RTX 5090 passed CUDA cross-validation, package reuse, final refit, export/reload and CPU inference checks. Cross-platform CI exercises the PyTorch pipeline where a current wheel exists, and tests unavailable-device rejection. Actual Apple MPS hardware and NVIDIA on Windows still need physical verification; each installation runs its own device check before enabling acceleration.
 
 To repair or update, download the current installer and open it again. To remove the connection, run `codex mcp remove helix` or `claude mcp remove --scope user helix`; remove the `helix-ml` folder in `~/.agents/skills` or `~/.claude/skills` to remove the companion skill. Experiments remain on disk unless you delete the state directory.
 
@@ -45,7 +57,7 @@ To repair or update, download the current installer and open it again. To remove
 If you already manage your own Node.js 22.13+ and Python 3.11+, the smaller npm package remains available:
 
 ```sh
-npx --yes --allow-remote=root --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.1/helix-mcp.tgz helix install codex --allow-local-code
+npx --yes --allow-remote=root --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.3.0/helix-mcp.tgz helix install codex --allow-local-code
 # Replace codex with claude for Claude Code, or use `helix doctor` to diagnose.
 ```
 
@@ -65,7 +77,7 @@ The hosted app runs on Railway. Mac, Windows and Linux users need a browser and 
 
 This CPU preview admits three active workspaces. Each fit has two CPU cores and a 1.2 GB memory ceiling, leaving memory for the agent and server. Closing the browser lets an active experiment finish. After five idle minutes, an inactive workspace is checkpointed and shut down; signing in restores it. Paused runs remain resumable. A machine failure before a checkpoint can lose changes since the last saved checkpoint. Dataset metadata, objectives, generated code and tool results reach the selected agent provider. Uploaded files and native login state are stored on Railway.
 
-Current verification covers real Railway CPU fits, model reload, private workspace save/restore, account separation and browser flows. Physical Mac and Windows acceptance still requires testing on those machines. NVIDIA/MPS acceleration and desktop installers remain future work.
+Current verification covers real Railway CPU fits, model reload, private workspace save/restore, account separation and browser flows. Physical Mac and Windows acceptance still requires testing on those machines. GPU acceleration is available through the local MCP path above; hosted workers remain CPU-only. Signed desktop installers remain future work.
 
 ## Self-host the web app
 
@@ -180,7 +192,7 @@ Joblib and Pickle have passed complete native-agent acceptance runs. PyTorch, To
 
 Model restrictions and strategy permissions are included in research, tool availability, per-candidate plans, agent review, and syntax checks for known violations. Syntax checks cannot prove arbitrary Python compliance. Keep the generated plan/audit/source available for review. Dependency additions are isolated per candidate; the winner's versions and Docker image ID are recorded. Pretrained model revisions and licenses are recorded separately and must be restored for reproduction when referenced.
 
-The hosted preview targets browsers on macOS, Windows and Linux. Its training workers are Linux CPU VMs. The optional local launcher still requires its documented prerequisites; native Windows execution is not supported by its POSIX process management. NVIDIA and Apple MPS acceleration and signed installers remain future work. Dataset schemas, objectives, generated code and tool results reach the selected agent provider through its native CLI. User credentials stay with that CLI; inherited user MCP servers and shell tools are disabled for these sessions.
+The hosted preview targets browsers on macOS, Windows and Linux. Its training workers are Linux CPU VMs. The optional local launcher still requires its documented prerequisites; native Windows execution is not supported by its POSIX process management. Local MCP supports NVIDIA CUDA and Apple MPS; this Docker-based browser runner remains CPU-only. Signed installers remain future work. Dataset schemas, objectives, generated code and tool results reach the selected agent provider through its native CLI. User credentials stay with that CLI; inherited user MCP servers and shell tools are disabled for these sessions.
 
 ## Development checks
 

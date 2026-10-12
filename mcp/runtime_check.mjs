@@ -134,14 +134,14 @@ try {
     state = await call("status", { runId, details: true });
     assert.match(state.contract, /trusted native/);
     assert.equal(state.dataset.sourceSha256, undefined); assert.equal(state.dataset.assets, undefined);
-    const before = Date.now(); await call("run_trial", { runId, sourceDir: source }); assert.ok(Date.now()-before < 5000);
+    const before = Date.now(); await call("run_trial", { runId, sourceDir: source, device: "cpu" }); assert.ok(Date.now()-before < 5000);
     state = await settled(runId); assert.equal(state.status, "ready", state.error); assert.ok(Number.isFinite(state.validationScore));
     if (scenario.metrics) { assert.ok(Number.isFinite(state.metricScores.f1)); assert.ok(Number.isFinite(state.metricScores.auroc)); }
     await call("finalize", { runId }); state = await settled(runId); assert.equal(state.status, "completed", state.error);
     await access(state.solutionZip);
     const inspected = await runProcess(runtime.python, ["-c", "import zipfile,sys,json; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; assert 'model/model.joblib' in z.namelist(); assert not any(n.endswith('train.csv') or n.endswith('truth.json') for n in z.namelist()); print(json.loads(z.read('experiment.json'))['validationScore'])", state.solutionZip]);
     assert.equal(Number(inspected.output.trim()), state.validationScore);
-    await assert.rejects(call("run_trial", { runId, sourceDir: source }), /frozen/);
+    await assert.rejects(call("run_trial", { runId, sourceDir: source, device: "cpu" }), /frozen/);
     console.log(`${scenario.metric}: validation ${state.validationScore}; test ${state.testScore}; verified ZIP/model reload`);
   }
   await disconnect(); connect();
@@ -150,13 +150,13 @@ try {
   const { runId } = await call("create_experiment", { dataset, objective: "Cancellation", target: "y", metric: "rmse", excludedColumns: ["label"], minutes: null, trials: 1, exportModel: false }); ids.push(runId);
   assert.equal((await settled(runId)).status, "ready");
   await writeFile(join(source, "train.py"), "import time\ntime.sleep(120)\n");
-  await call("run_trial", { runId, sourceDir: source }); await delay(1000);
+  await call("run_trial", { runId, sourceDir: source, device: "cpu" }); await delay(1000);
   const other = spawn(process.execPath, [entry, "doctor", "--home", home]); await once(other, "exit");
   await call("cancel", { runId }); let state = await settled(runId);
   assert.equal(state.status, "paused"); assert.equal(state.trials[0].status, "cancelled");
-  await assert.rejects(call("run_trial", { runId, sourceDir: source }), /trial budget/);
+  await assert.rejects(call("run_trial", { runId, sourceDir: source, device: "cpu" }), /trial budget/);
   await call("extend_budget", { runId, minutes: null, trials: 2 });
-  await call("run_trial", { runId, sourceDir: source }); await delay(700); await disconnect(); connect();
+  await call("run_trial", { runId, sourceDir: source, device: "cpu" }); await delay(700); await disconnect(); connect();
   state = await call("status", { runId }); assert.equal(state.status, "paused"); assert.equal(state.trials.length, 2);
   console.log("Cancellation, disconnect recovery, budgets, persistence and protocol checks passed.");
 } finally {

@@ -14,6 +14,7 @@ export const tools = [
     objective: string, target: string, metric: { ...string, enum: Object.keys(CATALOG) }, metrics: { type: "array", items: string }, positiveClass: string,
     learning: { ...string, enum: ["supervised", "clustering", "reduction"] },
     model: { ...string, description: "Optional model/family restriction; empty permits model search." },
+    device: { ...string, enum: ["auto", "cpu", "cuda", "mps"], description: "Default auto prefers a verified GPU. Explicit cpu/cuda/mps requires every candidate to use that device. Auto permits CPU candidates for CPU-only algorithms." },
     minutes: budget, trials: budget, validation: { ...string, enum: ["holdout", "cv"] }, folds: { ...integer, enum: [3, 5, 10] },
     testFraction: { type: "number" }, holdoutFraction: { type: "number" }, seeds: { type: "array", items: integer },
     excludedColumns: { type: "array", items: string }, assetColumns: { type: "array", items: string },
@@ -27,6 +28,7 @@ export const tools = [
   tool("list_experiments", "List saved local experiments across sessions, newest first.", {}, [], true),
   tool("run_trial", "Snapshot reviewed Python source and run one candidate on all fixed folds/seeds. Uses this computer with normal user permissions. Returns immediately; poll status. Include train.py and plan.json (component, change, rationale, modelFamily, strategies). For export include predict.py. Only submit source code, never credentials/data. Failed submissions after job start consume one trial. Optional packages are installed only for this candidate; reuse the base environment when possible.", {
     ...id, sourceDir: { ...string, description: "Absolute directory with candidate Python source and plan.json, outside Helix's state folder." },
+    device: { ...string, enum: ["cpu", "cuda", "mps"], description: "Candidate's actual training device. Defaults to the experiment preference. Choose cpu for sklearn/CPU-only models in auto experiments. Must honor an explicit experiment device." },
     packages: { type: "array", maxItems: 20, items: { ...internalTools.find(t => t.name === "install_package").inputSchema, required: ["name", "version"] } },
   }, ["runId", "sourceDir"]),
   tool("finalize", "Freeze the best validation candidate, refit it, evaluate the reserved test partition ONCE, verify model reload and export a solution ZIP. No further trials may be submitted to this run. Reserve time for finalization; extend the budget beforehand if necessary. Returns immediately; poll status.", id, ["runId"]),

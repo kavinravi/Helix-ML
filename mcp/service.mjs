@@ -10,6 +10,7 @@ import { CATALOG, isBetter } from "../local/metrics.mjs";
 import { expired, runProcess, remainingTime } from "../local/process.mjs";
 import { lockRunner } from "../local/lock.mjs";
 import { tools, validateArguments } from "./schema.mjs";
+import { probeCompute, selectDevice, trialDevice } from "./compute.mjs";
 
 const json = async path => JSON.parse(await readFile(path, "utf8"));
 const within = (root, path) => { const name = relative(root, path); return !name.startsWith("..") && !isAbsolute(name); };
@@ -33,7 +34,7 @@ export async function createMcpService(home, runtime) {
     if (run.environment?.runtime !== "native" || run.id !== id) throw new Error("This is not a local MCP experiment.");
     return run;
   };
-  const context = run => ({ root, runId: run.id, runtime, deadline: run.deadline, models: join(folder(run.id), "models"), runFile: join(folder(run.id), "run.json") });
+  const context = (run, device = run.environment.device || "cpu") => ({ root, runId: run.id, runtime: { ...runtime, device }, deadline: run.deadline, models: join(folder(run.id), "models"), runFile: join(folder(run.id), "run.json") });
   const view = async (run, details = false) => {
     let status = run.status;
     if (status === "running" && run.ownerPid) {
@@ -43,7 +44,8 @@ export async function createMcpService(home, runtime) {
       runId: run.id, status, phase: run.phase, objective: run.task.objective, task: run.task,
       deadline: run.deadline === null ? null : new Date(run.deadline).toISOString(),
       remainingSeconds: run.deadline === null ? null : Math.max(0, Math.floor((run.deadline - Date.now()) / 1000)),
-      trials: details ? run.trials : run.trials.slice(-5).map(({ id, status, score, metricScores, error }) => ({ id, status, score, metricScores, error })),
+      compute: { preferredDevice: run.environment.device || "cpu", requestedDevice: run.environment.requestedDevice || "cpu", capabilities: run.environment.compute },
+      trials: details ? run.trials : run.trials.slice(-5).map(({ id, status, score, metricScores, device, error }) => ({ id, status, score, metricScores, device, error })),
       trialCount: run.trials.length, best: run.best, validationScore: run.score, metricScores: run.metricScores,
       testScore: run.testScore, testMetricScores: run.testMetricScores,
       baseline: run.baseline, trainingHistory: run.trainingHistory, projection: run.projection, cachedModels: run.cachedModels,
@@ -92,13 +94,16 @@ export async function createMcpService(home, runtime) {
     const tool = tools.find(tool => tool.name === name);
     if (!tool) throw new Error("Unknown Helix tool.");
     validateArguments(tool.inputSchema, args);
-    if (name === "helix_info") return {
+    if (name === "helix_info") {
+      runtime.compute = await probeCompute(runtime.python);
+      return {
       runtime: { ...runtime, platform: process.platform, architecture: process.arch },
       execution: "Trusted local Python with normal user permissions. No Docker, host sandbox, or hard RAM quota. Training data remains local unless your agent sends it to its provider. No Helix cloud sync.",
       metrics: CATALOG,
-      workflow: "Show a proposed task, metrics, target, restrictions, splits and budgets. Create experiment; poll status for schema and code contract. Write source using your own editor tools. Submit run_trial; poll status and improve from measured validation results. Finalize the best candidate once. All long operations return immediately. Closing the client cancels active work and preserves completed trials. No nested agent process is launched.",
+      workflow: "Show a proposed task, metrics, target, restrictions, splits, budgets and training device. Read verified compute capabilities. CPU-only algorithms need device=cpu even when a GPU is available. Create experiment; poll status for schema and code contract. Write source using your own editor tools. Submit run_trial; poll status and improve from measured validation results. Finalize the best candidate once. All long operations return immediately. Closing the client cancels active work and preserves completed trials. No nested agent process is launched.",
       examples: join(harness, "..", "examples", "measurements.csv"),
-    };
+      };
+    }
     if (name === "helix_list_experiments") {
       const runs = [];
       for (const dir of await readdir(root, { withFileTypes: true })) {
@@ -115,8 +120,10 @@ export async function createMcpService(home, runtime) {
       if (within(await realpath(root), dataset)) throw new Error("Choose the original dataset outside Helix's private experiment directory.");
       const policy = { augmentation: false, regularization: true, features: true, tuning: true, pretrained: false, ensemble: false, ...args.policy };
       const task = validateTask({ ...defaults, ...args, dataset, policy, searchModels: !args.model });
+      runtime.compute = await probeCompute(runtime.python);
+      const device = selectDevice(runtime.compute, args.device);
       const run = await createRun(root, task);
-      run.environment = { runtime: "native", python: runtime.pythonVersion, platform: process.platform, architecture: process.arch, cpus: runtime.cpus, memoryMiB: runtime.memoryMiB, isolation: "trusted-user-process" };
+      run.environment = { runtime: "native", python: runtime.pythonVersion, platform: process.platform, architecture: process.arch, cpus: runtime.cpus, memoryMiB: runtime.memoryMiB, isolation: "trusted-user-process", requestedDevice: args.device || "auto", device, compute: runtime.compute };
       run.deadline = task.minutes === null ? null : Date.now() + task.minutes * 60_000;
       await saveRun(root, run);
       return start(run.id, "preparing", () => {}, async (run, signal) => {
@@ -124,6 +131,7 @@ export async function createMcpService(home, runtime) {
         await mkdir(join(folder(run.id), "data"));
         await mkdir(join(folder(run.id), "models"));
         manifest.installedPackages = JSON.parse((await container(context(run), ["python", "-c", "import json, importlib.metadata as m; print(json.dumps({d.metadata['Name']:d.version for d in m.distributions() if d.metadata['Name']}))"], { signal })).output);
+        manifest.compute = { device, ...runtime.compute };
         await writeFile(join(folder(run.id), "data", "manifest.json"), JSON.stringify(manifest));
         run.protocolHash = (await json(join(folder(run.id), "evaluation", "protocol.json"))).sha256;
         run.prepared = true;
@@ -159,12 +167,15 @@ export async function createMcpService(home, runtime) {
       if (!isAbsolute(args.sourceDir)) throw new Error("Use an absolute source directory.");
       const source = await realpath(args.sourceDir), state = await realpath(home);
       if (within(state, source) || within(source, state)) throw new Error("Keep candidate source outside Helix's private state directory, in a separate project folder.");
-      return start(args.runId, "training", run => {
+      let device;
+      return start(args.runId, "training", async run => {
         ready(run);
         if (run.task.trials !== null && run.trials.length >= run.task.trials) throw new Error("The trial budget has ended. Finalize, or extend the budget at the user's request.");
+        if ((args.device || run.environment.device || "cpu") !== "cpu") runtime.compute = await probeCompute(runtime.python);
+        device = trialDevice(runtime.compute, run.environment, args.device);
       }, async (run, signal) => {
         const id = `trial-${run.trials.length + 1}`;
-        const trial = { id, status: "running", createdAt: new Date().toISOString(), score: null };
+        const trial = { id, status: "running", createdAt: new Date().toISOString(), score: null, device };
         run.trials.push(trial);
         const workspace = join(folder(run.id), "trials", id), packages = join(folder(run.id), "dependencies", id);
         try {
@@ -184,10 +195,11 @@ export async function createMcpService(home, runtime) {
           await runProcess(runtime.python, [join(harness, "audit.py"), workspace, join(folder(run.id), "task.json")], { signal, timeout: remainingTime(run.deadline) });
           for (const pkg of args.packages || []) {
             log(run, "system", `Installing ${pkg.name}==${pkg.version} for ${id}.`);
-            await callTool("install_package", pkg, { ...context(run), signal, workspace, packages });
+            await callTool("install_package", pkg, { ...context(run, device), signal, workspace, packages });
           }
           if (run.task.output === "ipynb") await makeNotebook(workspace, run.task.seeds[0]);
-          const measured = await evaluateCandidate(root, run, workspace, { signal, deadline: run.deadline, candidateId: id, runtime, packages, onEvent: (type, message) => log(run, type, message) });
+          log(run, "system", `Candidate device: ${device.toUpperCase()}.`);
+          const measured = await evaluateCandidate(root, run, workspace, { signal, deadline: run.deadline, candidateId: id, runtime: context(run, device).runtime, packages, onEvent: (type, message) => log(run, type, message) });
           Object.assign(trial, measured, { status: "completed" });
           if (isBetter(run.task.metric, measured.score, run.score)) {
             run.best = id; run.score = measured.score; run.metricScores = measured.metricScores; run.baseline = measured.baseline;
@@ -195,9 +207,11 @@ export async function createMcpService(home, runtime) {
         } catch (error) { trial.status = signal.aborted ? "cancelled" : "failed"; trial.error = redact(error.message); throw error; }
       });
     }
-    if (name === "helix_finalize") return start(args.runId, "finalizing", run => {
+    if (name === "helix_finalize") return start(args.runId, "finalizing", async run => {
       if (!run.prepared || !run.best) throw new Error("Complete at least one successful validation trial first.");
       if (run.bundle) throw new Error("The experiment is already exported. Read helix_status for its solution ZIP.");
+      const device = run.trials.find(trial => trial.id === run.best)?.device || "cpu";
+      if (device !== "cpu") selectDevice(await probeCompute(runtime.python), device);
       // A frozen run may retry packaging, but evaluateFinal never repeats a started test.
     }, async (run, signal) => {
       run.selectionFrozen = true;
@@ -205,10 +219,12 @@ export async function createMcpService(home, runtime) {
       const final = join(folder(run.id), "final", "source");
       if (!await lstat(final).catch(error => { if (error.code === "ENOENT") return null; throw error; }))
         await cp(join(folder(run.id), "trials", run.best), final, { recursive: true });
-      const result = await evaluateFinal(root, run, final, { signal, deadline: run.deadline, runtime, packages: join(folder(run.id), "dependencies", run.best), onEvent: (type, message) => log(run, type, message) });
+      const device = run.trials.find(trial => trial.id === run.best)?.device || "cpu";
+      run.environment.selectedDevice = device;
+      const result = await evaluateFinal(root, run, final, { signal, deadline: run.deadline, runtime: context(run, device).runtime, packages: join(folder(run.id), "dependencies", run.best), onEvent: (type, message) => log(run, type, message) });
       run.testScore = result.score; run.testMetricScores = result.metricScores; run.testBaseline = result.baseline;
       run.trainingHistory = result.trainingHistory; run.projection = result.projection;
-      await finishBundle(root, run, context(run), signal);
+      await finishBundle(root, run, context(run, device), signal);
       run.bundle = join(folder(run.id), "final", "helix-solution.zip");
     });
   }

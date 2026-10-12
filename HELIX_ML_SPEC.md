@@ -1,5 +1,12 @@
 # Helix ML site and runner specification
 
+## Local MCP GPU update (2026-10-12)
+
+The local MCP installer configures PyTorch for compatible NVIDIA CUDA or Apple MPS hardware and verifies forward/backward execution before advertising a device. Experiments support auto/cpu/cuda/mps; candidates in auto experiments can choose CPU for algorithms without GPU implementations. Explicit device requests cannot silently fall back. Device selections and capabilities are persisted in trial/config/export metadata. Candidate dependency installation preserves the runtime's PyTorch variant. Local CPU experiments and the hosted CPU runner remain supported.
+
+CUDA training, 3-fold validation, package reuse, native export/reload and CPU inference have passed on an RTX 5090. Apple MPS and NVIDIA on Windows require physical hardware verification. One GPU per fit is supported; AMD/ROCm, distributed execution and hosted GPU workers are outside this update.
+
+
 This is the main handoff document. A future coding model should read it before modifying the project.
 
 ## Hosted product revision, October 6, 2026

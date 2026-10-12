@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { runProcess } from "../local/process.mjs";
 import { lockRunner } from "../local/lock.mjs";
+import { setupCompute } from "./compute.mjs";
 
 const requirements = fileURLToPath(new URL("requirements.txt", import.meta.url));
 export const pythonPath = home => join(home, "python", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
@@ -21,14 +22,19 @@ export async function runtimeConfig(home) {
 
 export async function setupRuntime(home, { allowLocalCode, report = console.error, uv } = {}) {
   if (!allowLocalCode) throw new Error("Local training runs generated Python with your user permissions, including file and network access. To use this trusted local mode, run again with --allow-local-code. No Docker is required.");
-  const release = await lockRunner(join(home, "setup"));
+  const release = await lockRunner(join(home, "compute"));
+  const finish = async config => {
+    config.compute = await setupCompute(config, report);
+    await writeFile(join(home, "runtime.json"), JSON.stringify(config, null, 2), { mode: 0o600 });
+    return config;
+  };
   try {
+    let existing;
     try {
-      const config = await runtimeConfig(home);
-      await runProcess(config.python, ["-I", "-c", check], { timeout: 30_000 });
-      report("Helix Python runtime is ready.");
-      return config;
-    } catch { /* Missing, changed or interrupted setup is repaired below. */ }
+      existing = await runtimeConfig(home);
+      await runProcess(existing.python, ["-I", "-c", check], { timeout: 30_000 });
+    } catch { existing = null; /* Missing, changed or interrupted setup is repaired below. */ }
+    if (existing) { report("Helix Python runtime is ready."); return await finish(existing); }
     await rm(join(home, "runtime.json"), { force: true });
     if (uv) {
       const env = { ...process.env, UV_PYTHON_INSTALL_DIR: join(home, "interpreters"), UV_CACHE_DIR: join(home, "cache", "uv"), UV_PYTHON_INSTALL_BIN: "0", UV_PYTHON_INSTALL_REGISTRY: "0" };
@@ -61,8 +67,7 @@ export async function setupRuntime(home, { allowLocalCode, report = console.erro
       requirementsHash: createHash("sha256").update(await readFile(requirements)).digest("hex"),
     };
     await mkdir(home, { recursive: true, mode: 0o700 });
-    await writeFile(join(home, "runtime.json"), JSON.stringify(config, null, 2), { mode: 0o600 });
     report(`Ready: Python ${version}, ${config.cpus} CPU threads, ${config.memoryMiB} MiB estimated fit budget.`);
-    return config;
+    return await finish(config);
   } finally { await release(); }
 }

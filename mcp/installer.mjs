@@ -68,7 +68,7 @@ async function main() {
         client = { "1": "codex", "2": "claude" }[answer];
         if (!client) throw new Error("Choose 1 or 2 next time you open the installer.");
       }
-      console.error("\nHelix will download Python and ML packages into its own folder.\nExperiments run on your computer with your file and network permissions.");
+      console.error("\nHelix will download Python and ML packages into its own folder.\nGPU support is configured automatically when compatible hardware is detected.\nExperiments run on your computer with your file and network permissions.");
       consent = /^(y|yes)$/i.test((await input.question("Install and allow local experiments? [y/N] ")).trim());
     } finally { input.close(); }
   }

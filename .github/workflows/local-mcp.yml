@@ -11,7 +11,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       HELIX_MCP_HOME: ${{ github.workspace }}/.helix/mcp ci
     steps:
@@ -20,6 +20,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python mcp/package.py
+      - run: python local/audit_check.py
       - name: Test downloaded bundle with private runtimes
         shell: bash
         run: |
@@ -28,6 +29,7 @@ jobs:
           if [ -f "$node.exe" ]; then node="$node.exe"; fi
           "$node" --test "$bundle/mcp/check.test.mjs"
           "$node" "$bundle/mcp/bundle_check.mjs"
+          "$node" "$bundle/mcp/gpu_check.mjs"
       - uses: actions/upload-artifact@v4
         with:
           name: installer-${{ matrix.os }}

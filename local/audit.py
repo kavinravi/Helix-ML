@@ -52,7 +52,9 @@ def check_source(source, task):
         reason = None
         if exact and name.startswith(estimators) and leaf != exact.group(1):
             reason = f"Only the requested estimator {exact.group(1)} is permitted"
-        if leaf in {"eval", "exec", "__import__"} or name.startswith("importlib."):
+        # PyTorch Module.eval() changes inference mode; it evaluates no Python string.
+        inference_mode = isinstance(node.func, ast.Attribute) and leaf == "eval" and not node.args and not node.keywords
+        if (leaf in {"eval", "exec", "__import__"} and not inference_mode) or name.startswith("importlib."):
             reason = "Dynamic code loading cannot be reviewed by the policy checker"
         if not policy["pretrained"] and leaf in {"from_pretrained", "load_state_dict_from_url", "hub_load"}:
             reason = "Pretrained weights are forbidden"

@@ -18,6 +18,10 @@ export function nativeEnvironment(runtime, temporary, mounts) {
     OMP_NUM_THREADS: String(runtime.cpus), OPENBLAS_NUM_THREADS: String(runtime.cpus),
     MKL_NUM_THREADS: String(runtime.cpus), NUMBA_NUM_THREADS: String(runtime.cpus),
     NUMBA_CACHE_DIR: join(temporary, "numba"), JUPYTER_RUNTIME_DIR: join(temporary, "jupyter"),
+    HELIX_DEVICE: runtime.device || "cpu", PYTORCH_ENABLE_MPS_FALLBACK: "0",
+    CUDA_VISIBLE_DEVICES: runtime.device === "cuda" ? (process.env.CUDA_VISIBLE_DEVICES ?? "0") : "-1",
+    CUBLAS_WORKSPACE_CONFIG: ":4096:8", TORCH_HOME: join(temporary, "torch"), CUDA_CACHE_PATH: join(temporary, "cuda"),
+    ...(runtime.compute?.torchVersion ? { HELIX_TORCH_VERSION: runtime.compute.torchVersion } : {}),
   });
   const names = { "/code": "HELIX_SOURCE", "/data": "HELIX_DATA", "/work": "HELIX_OUTPUT", "/models": "HELIX_MODELS", "/packages": "HELIX_PACKAGES" };
   for (const [source, target] of mounts) if (names[target]) env[names[target]] = source;

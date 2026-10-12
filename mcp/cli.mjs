@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
 import { setupRuntime, runtimeConfig } from "./runtime.mjs";
 import { runProcess } from "../local/process.mjs";
+import { probeCompute, selectDevice } from "./compute.mjs";
 
 const project = fileURLToPath(new URL("..", import.meta.url));
 const usage = `Helix ML — local MCP for Codex and Claude Code
@@ -84,7 +85,8 @@ async function main() {
   } else if (command === "doctor") {
     const runtime = await runtimeConfig(home);
     const result = await runProcess(runtime.python, ["-I", "-c", "import sys, numpy, pandas, sklearn; print('Python '+sys.version.split()[0]+'; scikit-learn '+sklearn.__version__)"], { timeout: 30_000 });
-    console.log(result.output.trim() + `\nReady for local CPU training. Data: ${join(home, "experiments")}`);
+    const compute = await probeCompute(runtime.python);
+    console.log(result.output.trim() + `\nReady for local ${selectDevice(compute).toUpperCase()} training. Data: ${join(home, "experiments")}\n` + JSON.stringify(compute, null, 2));
   } else if (command === "serve") {
     const runtime = await runtimeConfig(home);
     const { serve } = await import("./server.mjs");

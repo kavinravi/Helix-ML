@@ -12,6 +12,8 @@ import { lockRunner } from "../local/lock.mjs";
 import { runProcess } from "../local/process.mjs";
 import { fileURLToPath } from "node:url";
 import { prepareBundle, installBundle } from "./installer.mjs";
+import { torchPlan, selectDevice, trialDevice } from "./compute.mjs";
+import { torchPackageOptions } from "../local/tools.mjs";
 
 test("native paths are mapped only as path arguments, preserving spaces and inline code", () => {
   const mounts = [[join(tmpdir(), "space, dir"), "/data"]];
@@ -31,6 +33,44 @@ test("training gets declared imports and no inherited credentials; scorer gets n
   assert.equal(scorer.PYTHONPATH, "harness");
   assert.equal(scorer.HELIX_SOURCE, undefined);
   delete process.env.HELIX_TEST_SECRET;
+});
+
+test("GPU setup selects compatible wheels and never silently downgrades an explicit device", () => {
+  const nvidia = (driver, capability) => ({ platform: "linux", gpus: [{ driver, capability }] });
+  assert.match(torchPlan(nvidia("591.86", 12)).index, /cu130$/);
+  assert.match(torchPlan(nvidia("580.65.06", 12)).index, /cu130$/);
+  assert.ok(torchPlan(nvidia("580.65.05", 12)).reason);
+  assert.match(torchPlan({...nvidia("580.88", 12), platform: "win32"}).index, /cu130$/);
+  assert.ok(torchPlan({...nvidia("580.87", 12), platform: "win32"}).reason);
+  assert.match(torchPlan(nvidia("591.86", 6.1)).index, /cu126$/);
+  assert.match(torchPlan(nvidia("560.35", 8.6)).index, /cu126$/);
+  assert.ok(torchPlan(nvidia("550.12", 8.6)).reason);
+  assert.ok(torchPlan(nvidia("560.35", 12)).reason);
+  assert.equal(torchPlan({platform: "darwin", architecture: "arm64", macos: "15.0", gpus: []}).device, "mps");
+  assert.ok(torchPlan({platform: "darwin", architecture: "arm64", macos: "13.0", gpus: []}).reason);
+  assert.equal(torchPlan({platform: "darwin", architecture: "x86_64", macos: "15.0", gpus: []}).device, "cpu");
+  const compute = { available: ["cpu", "cuda"] };
+  assert.equal(selectDevice(compute), "cuda");
+  assert.equal(selectDevice({available: ["cpu", "mps"]}), "mps");
+  assert.throws(() => selectDevice(compute, "mps"), /unavailable/);
+  assert.throws(() => trialDevice(compute, {device: "cuda", requestedDevice: "cuda"}, "cpu"), /requires CUDA/);
+  assert.equal(trialDevice(compute, {device: "cuda", requestedDevice: "auto"}, "cpu"), "cpu");
+  assert.equal(trialDevice(compute, {}, undefined), "cpu", "old CPU experiments retain their device");
+  assert.deepEqual(torchPackageOptions("torch"), ["--index-url", "https://download.pytorch.org/whl/cpu"]);
+  assert.deepEqual(torchPackageOptions("torch", {kind:"native",compute:{torchIndex:"https://download.pytorch.org/whl/cu130"}}), process.platform === "darwin" ? [] : ["--index-url", "https://download.pytorch.org/whl/cu130"]);
+});
+
+test("native GPU selection reaches child processes without enabling MPS fallback", () => {
+  const runtime = {python: "python", cpus: 2, memoryMiB: 1024, device: "cuda", compute:{torchVersion:"2.14.1+cu130"}};
+  const env = nativeEnvironment(runtime, tmpdir(), []);
+  assert.equal(env.HELIX_DEVICE, "cuda");
+  assert.equal(env.CUDA_VISIBLE_DEVICES, process.env.CUDA_VISIBLE_DEVICES ?? "0");
+  assert.equal(env.HELIX_TORCH_VERSION, "2.14.1+cu130");
+  const cpu = nativeEnvironment({...runtime, device: "cpu"}, tmpdir(), []);
+  assert.equal(cpu.CUDA_VISIBLE_DEVICES, "-1");
+  const mps = nativeEnvironment({...runtime, device: "mps"}, tmpdir(), []);
+  assert.equal(mps.HELIX_DEVICE, "mps");
+  assert.equal(mps.PYTORCH_ENABLE_MPS_FALLBACK, "0");
 });
 
 test("MCP validates types, required values and unknown nested options", () => {
