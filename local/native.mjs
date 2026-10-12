@@ -1,6 +1,7 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runProcess, expired, remainingTime } from "./process.mjs";
 import { directoryBytes } from "./runtime.mjs";
 
@@ -18,6 +19,7 @@ export function nativeEnvironment(runtime, temporary, mounts) {
     OMP_NUM_THREADS: String(runtime.cpus), OPENBLAS_NUM_THREADS: String(runtime.cpus),
     MKL_NUM_THREADS: String(runtime.cpus), NUMBA_NUM_THREADS: String(runtime.cpus),
     NUMBA_CACHE_DIR: join(temporary, "numba"), JUPYTER_RUNTIME_DIR: join(temporary, "jupyter"),
+    PIP_CACHE_DIR: join(dirname(dirname(dirname(runtime.python))), "cache", "pip"),
     HELIX_DEVICE: runtime.device || "cpu", PYTORCH_ENABLE_MPS_FALLBACK: "0",
     CUDA_VISIBLE_DEVICES: runtime.device === "cuda" ? (process.env.CUDA_VISIBLE_DEVICES ?? "0") : "-1",
     CUBLAS_WORKSPACE_CONFIG: ":4096:8", TORCH_HOME: join(temporary, "torch"), CUDA_CACHE_PATH: join(temporary, "cuda"),
@@ -37,6 +39,23 @@ export function nativeArguments(command, mounts) {
   })];
 }
 
+export async function nativeLibraryPaths(roots) {
+  const paths = [];
+  const entries = root => readdir(root, {withFileTypes:true}).catch(error => { if (error.code === "ENOENT") return []; throw error; });
+  // Wheel RPATHs assume one site-packages directory; candidates also reuse base wheels.
+  for (const root of roots) {
+    for (const entry of await entries(root)) {
+      if (!entry.isDirectory()) continue;
+      const folder = join(root, entry.name);
+      if (entry.name.endsWith(".libs")) paths.push(folder);
+      for (const child of await entries(folder)) if (child.isDirectory() && ["lib", "lib64"].includes(child.name)) paths.push(join(folder, child.name));
+    }
+    for (const vendor of await entries(join(root, "nvidia"))) if (vendor.isDirectory())
+      for (const child of await entries(join(root, "nvidia", vendor.name))) if (child.isDirectory() && ["lib", "lib64"].includes(child.name)) paths.push(join(root, "nvidia", vendor.name, child.name));
+  }
+  return paths;
+}
+
 export async function nativeProcess(context, command, { mounts = [], signal, onLine, writable, limit = 1_000_000_000 } = {}) {
   if (expired(context.deadline)) throw new Error("The run budget has expired.");
   const temporary = await mkdtemp(join(tmpdir(), "helix-fit-"));
@@ -53,8 +72,17 @@ export async function nativeProcess(context, command, { mounts = [], signal, onL
     finally { checking = false; }
   }, 1000);
   try {
-    const result = await runProcess(context.runtime.python, nativeArguments(command, mounts), {
-      cwd: writable || temporary, env: nativeEnvironment(context.runtime, temporary, mounts),
+    const env = nativeEnvironment(context.runtime, temporary, mounts);
+    let args = nativeArguments(command, mounts);
+    if (env.HELIX_PACKAGES) {
+      args = [...args.slice(0, 3), fileURLToPath(new URL("native_entry.py", import.meta.url)), ...args.slice(3)];
+      if (process.platform === "linux") {
+        const base = join(dirname(dirname(context.runtime.python)), "lib", "python" + context.runtime.pythonVersion.split(".").slice(0, 2).join("."), "site-packages");
+        env.LD_LIBRARY_PATH = (await nativeLibraryPaths([env.HELIX_PACKAGES, base])).join(delimiter);
+      }
+    }
+    const result = await runProcess(context.runtime.python, args, {
+      cwd: writable || temporary, env,
       signal: combined, timeout: remainingTime(context.deadline), onLine,
     });
     if (writable && await directoryBytes(writable) > limit) throw new Error("Runtime output exceeds the disk limit.");

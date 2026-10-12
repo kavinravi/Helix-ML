@@ -1,6 +1,6 @@
 {
   "name": "helix-ml",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -27,7 +27,9 @@
     "test:hosted": "node hosted/check.mjs",
     "test:mcp": "node --test mcp/check.test.mjs",
     "test:mcp:runtime": "node mcp/runtime_check.mjs",
-    "test:mcp:gpu": "node mcp/gpu_check.mjs"
+    "test:mcp:gpu": "node mcp/gpu_check.mjs",
+    "test:mcp:rl": "node mcp/rl_check.mjs",
+    "test:mcp:frameworks": "node mcp/framework_check.mjs"
   },
   "dependencies": {
     "react": "19.1.0",

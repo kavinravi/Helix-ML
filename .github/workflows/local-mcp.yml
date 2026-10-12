@@ -30,6 +30,8 @@ jobs:
           "$node" --test "$bundle/mcp/check.test.mjs"
           "$node" "$bundle/mcp/bundle_check.mjs"
           "$node" "$bundle/mcp/gpu_check.mjs"
+          "$node" "$bundle/mcp/rl_check.mjs"
+          if [ "${{ matrix.os }}" != "macos-15-intel" ]; then "$node" "$bundle/mcp/framework_check.mjs"; fi
       - uses: actions/upload-artifact@v4
         with:
           name: installer-${{ matrix.os }}

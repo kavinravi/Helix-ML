@@ -10,10 +10,10 @@ Download the installer for your computer. **You do not need to install Node, Pyt
 
 | Computer | Download |
 | --- | --- |
-| Mac with Apple Silicon (M1 or newer) | [Mac Apple Silicon](https://github.com/kavinravi/Helix-ML/releases/download/v0.3.0/helix-mcp-macos-arm64.zip) |
-| Mac with Intel | [Mac Intel](https://github.com/kavinravi/Helix-ML/releases/download/v0.3.0/helix-mcp-macos-x64.zip) |
-| Windows (Intel/AMD, 64-bit) | [Windows](https://github.com/kavinravi/Helix-ML/releases/download/v0.3.0/helix-mcp-windows-x64.zip) |
-| Linux (Intel/AMD, 64-bit) | [Linux](https://github.com/kavinravi/Helix-ML/releases/download/v0.3.0/helix-mcp-linux-x64.zip) |
+| Mac with Apple Silicon (M1 or newer) | [Mac Apple Silicon](https://github.com/kavinravi/Helix-ML/releases/download/v0.4.0/helix-mcp-macos-arm64.zip) |
+| Mac with Intel | [Mac Intel](https://github.com/kavinravi/Helix-ML/releases/download/v0.4.0/helix-mcp-macos-x64.zip) |
+| Windows (Intel/AMD, 64-bit) | [Windows](https://github.com/kavinravi/Helix-ML/releases/download/v0.4.0/helix-mcp-windows-x64.zip) |
+| Linux (Intel/AMD, 64-bit) | [Linux](https://github.com/kavinravi/Helix-ML/releases/download/v0.4.0/helix-mcp-linux-x64.zip) |
 
 1. Extract the ZIP, then open **Install Helix** (`.command` on Mac, `.cmd` on Windows, `.sh` on Linux).
 2. Choose Codex or Claude Code and accept local execution. Keep the window open while setup finishes.
@@ -21,7 +21,7 @@ Download the installer for your computer. **You do not need to install Node, Pyt
 
 Node is bundled. The installer uses [uv](https://docs.astral.sh/uv/guides/install-python/) to download a private Python 3.12 and install the ML packages automatically; the first setup needs internet and can take a few minutes. It registers the MCP server and installs the companion workflow skill. It doesn't require administrator access or change system Python, shell profiles or the global PATH. Once installation finishes, you can delete the downloaded folder: the connection uses Helix's permanent runtime copy. Reopening the installer repairs or updates it while keeping saved experiments.
 
-These preview installers are unsigned, so macOS or Windows may require approval before opening. Linux users may need to run `bash "Install Helix.sh"` from the extracted folder. Checksums are included on the [release page](https://github.com/kavinravi/Helix-ML/releases/tag/v0.3.0).
+These preview installers are unsigned, so macOS or Windows may require approval before opening. Linux users may need to run `bash "Install Helix.sh"` from the extracted folder. Checksums are included on the [release page](https://github.com/kavinravi/Helix-ML/releases/tag/v0.4.0).
 
 **Local execution:** accepting the installer prompt (or passing `--allow-local-code` in the CLI) acknowledges that generated Python runs with your user permissions, including file and network access. A virtual environment isolates dependencies; it does not sandbox code. Only run candidates you trust. Helix omits validation labels from the normal training inputs and independently computes scores, but native mode cannot protect evaluation files from deliberately hostile code. It strips inherited credentials from training subprocess environments; this does not prevent access to credentials stored on disk.
 
@@ -51,13 +51,34 @@ A real RTX 5090 passed CUDA cross-validation, package reuse, final refit, export
 
 To repair or update, download the current installer and open it again. To remove the connection, run `codex mcp remove helix` or `claude mcp remove --scope user helix`; remove the `helix-ml` folder in `~/.agents/skills` or `~/.claude/skills` to remove the companion skill. Experiments remain on disk unless you delete the state directory.
 
+### cuML, TensorFlow/Keras and reinforcement learning
+
+The local MCP can install these frameworks per experiment. Large wheel downloads are cached privately for later trials. Setup/download progress appears in `helix_status`. They do not add a Docker requirement or turn Railway into a GPU worker.
+
+| Framework | Execution | Export / verification |
+|---|---|---|
+| PyTorch | CPU, NVIDIA CUDA, Apple MPS | State dictionaries verified end to end on all three devices; TorchScript/ONNX require model-specific export code. |
+| cuML | NVIDIA CUDA on Linux or WSL2 | Direct cuML estimators, independent CSV scoring and Joblib/Pickle reload. Native Windows/macOS are unsupported. |
+| TensorFlow + Keras | CPU, or NVIDIA CUDA on Linux/WSL2 | `.keras` and SavedModel training, independent scoring and reload checks. TensorFlow does not use PyTorch MPS. |
+| Stable-Baselines3 | CPU by default; explicit CUDA/MPS for compatible policies | Fresh policy training, measured validation rewards, separate final test episode seeds, saved policy ZIP and reproduction script. |
+
+For cuML ask, for example, **"Use Helix and cuML KMeans on CUDA to maximize silhouette score."** The agent requests an exact `cuml-cu12` or `cuml-cu13` version matching the runtime. Only methods that can predict/transform held-out rows meet the CSV evaluation contract. Fixed-dimension PCA is supported; cumulative-variance PCA keeps the existing sklearn reference protocol. cuML exports normally require a compatible NVIDIA environment to reload. See [RAPIDS installation requirements](https://docs.rapids.ai/install/).
+
+For TensorFlow ask **"Use Helix to train a Keras classifier and export a .keras model."** CPU uses the `tensorflow` package; CUDA uses `tensorflow[and-cuda]`. The agent must verify TensorFlow's own GPU visibility and tensor placement. A successful PyTorch hardware probe does not certify TensorFlow or cuML. Framework support is not a promise that every custom layer, operation, architecture or export conversion works. Custom serialization must pass the same loader and prediction checks. See [TensorFlow platform support](https://www.tensorflow.org/install/pip).
+
+For RL ask **"Use Helix to train PPO on CartPole-v1 for 20,000 timesteps and compare three trials."** No CSV or target column is needed. Helix supports PPO, A2C, DQN, SAC, TD3 and DDPG through [Stable-Baselines3](https://stable-baselines3.readthedocs.io/en/master/guide/quickstart.html). `helix_info` lists standard classic-control, toy-text, Box2D and MuJoCo environments; their dependencies install when selected. Custom environments, reward wrappers and Atari preprocessing are not implemented. Current SB3 requires a PyTorch version unavailable on Intel macOS; use Apple Silicon, Windows or Linux for RL.
+
+`helix_create_rl_experiment` fixes the environment, episode horizon, training seed, evaluation episode count and budgets. `helix_run_rl_trial` takes an algorithm, `totalTimesteps` and optional SB3 hyperparameters. Defaults are 30 minutes, 12 trials, training seed 42 and 10 validation/test episodes each. The default episode horizon comes from Gymnasium, with a 1,000-step bound for environments without one. CPU is preferred for small MLP policies. SB3 can finish a rollout beyond the requested timestep count; status records actual timesteps and measured training episode rewards. Wall-time cancellation still applies.
+
+Candidates are ranked by mean undiscounted validation episode return with deterministic policy inference. A separate process reloads each policy before evaluation. Finalization freezes the selected checkpoint and evaluates it once on different reserved seeds, without retraining. Its solution ZIP includes the policy, source, parameters, episode seeds, training rewards, test results and dependency versions. Results describe one training seed, not performance across independently trained policies. Failed/cancelled trials consume a trial; completed results persist.
+
 <details>
 <summary>Advanced: source checkout or npm installation</summary>
 
 If you already manage your own Node.js 22.13+ and Python 3.11+, the smaller npm package remains available:
 
 ```sh
-npx --yes --allow-remote=root --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.3.0/helix-mcp.tgz helix install codex --allow-local-code
+npx --yes --allow-remote=root --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.4.0/helix-mcp.tgz helix install codex --allow-local-code
 # Replace codex with claude for Claude Code, or use `helix doctor` to diagnose.
 ```
 
@@ -188,7 +209,7 @@ One experiment runs at a time per runner. Pause interrupts the current candidate
 
 Python and notebook output execute the same source. Notebooks run in a fresh Jupyter kernel during evaluation. Every requested model export is checked with its native format loader and a separate prediction process without training labels. Predictions must match exactly for labels or within `1e-6 × max(1, abs(value))` for numbers. Failed conversions/reloads reject the candidate; Helix never silently changes an explicit format.
 
-Joblib and Pickle have passed complete native-agent acceptance runs. PyTorch, TorchScript, Keras, SavedModel and ONNX have loader/reload checks, but each requires an appropriate model and installed dependencies; their framework-specific end-to-end coverage remains future work. Choose **Native** when you do not need a specific format. Inspect generated code and load only artifacts from runs you trust.
+Joblib and Pickle have passed complete native-agent acceptance runs. The local MCP also has end-to-end PyTorch, cuML, Keras and SavedModel integration checks. TorchScript and ONNX have native loader/reload checks but remain model-specific conversions without the same integration coverage. Custom objects need compatible serialization; a framework package alone does not guarantee export support. Choose **Native** when you do not need a specific format. Inspect generated code and load only artifacts from runs you trust.
 
 Model restrictions and strategy permissions are included in research, tool availability, per-candidate plans, agent review, and syntax checks for known violations. Syntax checks cannot prove arbitrary Python compliance. Keep the generated plan/audit/source available for review. Dependency additions are isolated per candidate; the winner's versions and Docker image ID are recorded. Pretrained model revisions and licenses are recorded separately and must be restored for reproduction when referenced.
 

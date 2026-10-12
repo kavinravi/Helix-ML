@@ -4,7 +4,7 @@ import { mkdtemp, rm, readFile, writeFile, access, symlink, mkdir } from "node:f
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { nativeArguments, nativeEnvironment } from "../local/native.mjs";
+import { nativeArguments, nativeEnvironment, nativeLibraryPaths } from "../local/native.mjs";
 import { tools, validateArguments } from "./schema.mjs";
 import { setupRuntime } from "./runtime.mjs";
 import { registrationArgs, install } from "./cli.mjs";
@@ -13,7 +13,58 @@ import { runProcess } from "../local/process.mjs";
 import { fileURLToPath } from "node:url";
 import { prepareBundle, installBundle } from "./installer.mjs";
 import { torchPlan, selectDevice, trialDevice } from "./compute.mjs";
-import { torchPackageOptions } from "../local/tools.mjs";
+import { torchPackageOptions, frameworkPackageOptions } from "../local/tools.mjs";
+import { rlTask, validateRlBudget } from "./rl.mjs";
+import { dependencyInstallCommand } from "../local/export.mjs";
+
+test("export install commands use the actual candidate Torch variant and RAPIDS index", () => {
+  assert.match(dependencyInstallCommand("torch==2.14.1+cpu\n"), /whl\/cpu$/);
+  assert.match(dependencyInstallCommand("torch==2.14.1+cu130\ncuml-cu13==26.10.0\n"), /whl\/cu130.*pypi.nvidia.com$/);
+  assert.equal(dependencyInstallCommand("torch==2.14.1\nnumpy==2.5.4\n"),"pip install -r requirements.lock");
+});
+
+test("native libraries are found in candidate and base wheel locations without unrelated recursion", async () => {
+  const temp = await mkdtemp(join(tmpdir(),"helix libraries "));
+  try {
+    for (const name of ["candidate/libcuml/lib64","candidate/nvidia/cu13/lib","candidate/numpy.libs","base/nvidia/cublas/lib","candidate/unrelated/deep/lib"])
+      await mkdir(join(temp,name),{recursive:true});
+    const paths = await nativeLibraryPaths([join(temp,"candidate"),join(temp,"base"),join(temp,"missing")]);
+    assert.equal(paths.length,4);
+    assert.ok(paths.includes(join(temp,"candidate/libcuml/lib64")));
+    assert.ok(paths.indexOf(join(temp,"candidate/nvidia/cu13/lib")) < paths.indexOf(join(temp,"base/nvidia/cublas/lib")));
+  } finally { await rm(temp,{recursive:true,force:true}); }
+});
+
+test("GPU framework packages reject unsupported platforms and devices before download", () => {
+  const runtime = {kind:"native",device:"cuda",compute:{cuda:{runtime:"13.0"}}};
+  assert.deepEqual(frameworkPackageOptions("cuml-cu13",runtime,"linux"), ["--extra-index-url","https://pypi.nvidia.com"]);
+  for (const platform of ["win32","darwin"]) assert.throws(() => frameworkPackageOptions("cuml-cu13",runtime,platform),/Linux or WSL2/);
+  assert.throws(() => frameworkPackageOptions("cuml-cu12",{...runtime,device:"cpu"},"linux"),/NVIDIA CUDA/);
+  assert.throws(() => frameworkPackageOptions("cuml-cu13",{...runtime,compute:{cuda:{runtime:"12.6"}}},"linux"),/CUDA 12/);
+  assert.throws(() => frameworkPackageOptions("cuml-cu12",{...runtime,compute:{cuda:{runtime:"12.6",capability:"6.1"}}},"linux"),/capability 7.0/);
+  assert.throws(() => frameworkPackageOptions("tensorflow-cpu",runtime,"linux"),/and-cuda/);
+  assert.throws(() => frameworkPackageOptions("tensorflow[and-cuda]",runtime,"win32"),/Linux/);
+  assert.throws(() => frameworkPackageOptions("tensorflow",{...runtime,device:"mps"},"darwin"),/MPS/);
+  assert.deepEqual(frameworkPackageOptions("tensorflow[and-cuda]",runtime,"linux"),[]);
+  assert.deepEqual(frameworkPackageOptions("tensorflow",{...runtime,device:"cpu"},"win32"),[]);
+});
+
+test("RL accepts only standard environments and bounded, typed parameters", () => {
+  const create = tools.find(t => t.name === "helix_create_rl_experiment").inputSchema;
+  const trial = tools.find(t => t.name === "helix_run_rl_trial").inputSchema;
+  const good = {envId:"CartPole-v1",objective:"maximize episode return"};
+  validateArguments(create,good);
+  assert.equal(rlTask(good).metric,"episode_return");
+  assert.equal(rlTask(good).evaluationEpisodes,10);
+  assert.throws(() => rlTask({...good,envId:"module:untrusted"}),/standard/);
+  assert.throws(() => rlTask({...good,objective:" "}),/objective/);
+  assert.throws(() => validateRlBudget({minutes:null,trials:null}),/at least one/);
+  assert.throws(() => validateRlBudget({minutes:-1,trials:3}));
+  for (const bad of [{...good,seed:-1},{...good,seed:2**32},{...good,evaluationEpisodes:1001}]) assert.throws(() => validateArguments(create,bad));
+  const candidate = {runId:"id",algorithm:"PPO",totalTimesteps:1000,hyperparameters:{n_steps:64,net_arch:[32,32]}};
+  validateArguments(trial,candidate);
+  for (const bad of [{...candidate,totalTimesteps:0},{...candidate,hyperparameters:{gamma:1.1}},{...candidate,hyperparameters:{eval_env:"secret"}},{...candidate,algorithm:"invented"}]) assert.throws(() => validateArguments(trial,bad));
+});
 
 test("native paths are mapped only as path arguments, preserving spaces and inline code", () => {
   const mounts = [[join(tmpdir(), "space, dir"), "/data"]];

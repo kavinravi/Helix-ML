@@ -11,6 +11,7 @@ import { expired, runProcess, remainingTime } from "../local/process.mjs";
 import { lockRunner } from "../local/lock.mjs";
 import { tools, validateArguments } from "./schema.mjs";
 import { probeCompute, selectDevice, trialDevice } from "./compute.mjs";
+import { RL_ENVIRONMENTS, RL_VERSIONS, rlTask, rlContract, validateRlBudget, prepareRl, runRlTrial, finalizeRl } from "./rl.mjs";
 
 const json = async path => JSON.parse(await readFile(path, "utf8"));
 const within = (root, path) => { const name = relative(root, path); return !name.startsWith("..") && !isAbsolute(name); };
@@ -34,7 +35,7 @@ export async function createMcpService(home, runtime) {
     if (run.environment?.runtime !== "native" || run.id !== id) throw new Error("This is not a local MCP experiment.");
     return run;
   };
-  const context = (run, device = run.environment.device || "cpu") => ({ root, runId: run.id, runtime: { ...runtime, device }, deadline: run.deadline, models: join(folder(run.id), "models"), runFile: join(folder(run.id), "run.json") });
+  const context = (run, device = run.environment.device || "cpu") => ({ root, runId: run.id, runtime: { ...runtime, device }, deadline: run.deadline, models: join(folder(run.id), "models"), runFile: join(folder(run.id), "run.json"), onProgress: line => log(run, "system", line) });
   const view = async (run, details = false) => {
     let status = run.status;
     if (status === "running" && run.ownerPid) {
@@ -50,8 +51,8 @@ export async function createMcpService(home, runtime) {
       testScore: run.testScore, testMetricScores: run.testMetricScores,
       baseline: run.baseline, trainingHistory: run.trainingHistory, projection: run.projection, cachedModels: run.cachedModels,
       error: run.error, logs: run.logs.slice(-10),
-      ...(run.prepared && details ? { dataset: await json(join(folder(run.id), "data", "manifest.json")), contract: contract(run) } : {}),
-      ...(run.bundle ? { solutionZip: run.bundle, sourceDir: join(folder(run.id), "final", "source") } : {}),
+      ...(run.prepared && details ? run.task.learning === "reinforcement" ? { environment: run.rlEnvironment, contract: rlContract(run) } : { dataset: await json(join(folder(run.id), "data", "manifest.json")), contract: contract(run) } : {}),
+      ...(run.bundle ? { solutionZip: run.bundle, sourceDir: join(folder(run.id), "final", ...(run.task.learning === "reinforcement" ? [] : ["source"])) } : {}),
     };
   };
 
@@ -86,7 +87,7 @@ export async function createMcpService(home, runtime) {
   }
 
   const ready = run => {
-    if (!run.prepared) throw new Error("Dataset preparation has not completed. Check helix_status.");
+    if (!run.prepared) throw new Error("Experiment preparation has not completed. Check helix_status.");
     if (run.selectionFrozen) throw new Error("Selection is frozen. Further validation trials cannot use an experiment whose test was revealed. Create a new experiment for a new study.");
   };
 
@@ -100,6 +101,8 @@ export async function createMcpService(home, runtime) {
       runtime: { ...runtime, platform: process.platform, architecture: process.arch },
       execution: "Trusted local Python with normal user permissions. No Docker, host sandbox, or hard RAM quota. Training data remains local unless your agent sends it to its provider. No Helix cloud sync.",
       metrics: CATALOG,
+      reinforcement: { environments: Object.keys(RL_ENVIRONMENTS), versions: RL_VERSIONS, metric: "mean undiscounted episode return", workflow: "create_rl_experiment → run_rl_trial → status → finalize. CPU default. Fixed validation seeds; final held-out episode seeds evaluated once." },
+      frameworks: { pytorch: "CPU/CUDA/MPS; device check uses PyTorch, not other frameworks", cuml: "CUDA on Linux/WSL2 only; request cuml-cu12 or cuml-cu13 with an exact version", tensorflow: "CPU, or Linux/WSL2 CUDA with tensorflow[and-cuda]; no MPS integration", keras: "TensorFlow backend by default. Export .keras or SavedModel; custom serialization must pass the native reload check." },
       workflow: "Show a proposed task, metrics, target, restrictions, splits, budgets and training device. Read verified compute capabilities. CPU-only algorithms need device=cpu even when a GPU is available. Create experiment; poll status for schema and code contract. Write source using your own editor tools. Submit run_trial; poll status and improve from measured validation results. Finalize the best candidate once. All long operations return immediately. Closing the client cancels active work and preserves completed trials. No nested agent process is launched.",
       examples: join(harness, "..", "examples", "measurements.csv"),
       };
@@ -138,6 +141,25 @@ export async function createMcpService(home, runtime) {
         log(run, "system", "Dataset prepared. Write a candidate using the returned schema and contract.");
       }).catch(async error => { await rm(folder(run.id), { recursive: true, force: true }); throw error; });
     }
+    if (name === "helix_create_rl_experiment") {
+      const task = rlTask(args);
+      if (process.platform === "darwin" && process.arch === "x64") throw new Error("Current Stable-Baselines3 requires PyTorch 2.8+, which has no Intel Mac wheel. Use Apple Silicon, Windows or Linux for RL.");
+      runtime.compute = await probeCompute(runtime.python);
+      const device = selectDevice(runtime.compute, args.device || "cpu");
+      const run = await createRun(root, task);
+      run.environment = { runtime: "native", python: runtime.pythonVersion, platform: process.platform, architecture: process.arch,
+        cpus: runtime.cpus, memoryMiB: runtime.memoryMiB, requestedDevice: device, device, compute: runtime.compute };
+      run.deadline = task.minutes === null ? null : Date.now() + task.minutes * 60_000;
+      await saveRun(root, run);
+      return start(run.id, "preparing environment", () => {}, (run, signal) => prepareRl(root, run, context(run), signal))
+        .catch(async error => { await rm(folder(run.id), { recursive: true, force: true }); throw error; });
+    }
+    if (name === "helix_run_rl_trial") return start(args.runId, "training policy", async run => {
+      ready(run);
+      if (run.task.learning !== "reinforcement") throw new Error("Use helix_run_trial for CSV experiments.");
+      if (run.task.trials !== null && run.trials.length >= run.task.trials) throw new Error("The trial budget has ended. Finalize, or extend the budget at the user's request.");
+      if (run.environment.device !== "cpu") selectDevice(await probeCompute(runtime.python), run.environment.device);
+    }, (run, signal) => runRlTrial(root, run, args, context(run), signal));
     if (name === "helix_status") return view(await load(args.runId), args.details);
     if (name === "helix_cache_model") return start(args.runId, "caching model", run => {
       ready(run);
@@ -155,9 +177,11 @@ export async function createMcpService(home, runtime) {
     if (name === "helix_extend_budget") {
       const release = await lockRunner(join(home, "compute"));
       try {
-        const run = await load(args.runId); ready(run);
-        run.task = validateTask({ ...run.task, minutes: args.minutes, trials: args.trials });
-        if (run.task.trials !== null && run.task.trials < run.trials.length) throw new Error("The new total must include all trials already attempted.");
+        const run = await load(args.runId);
+        if (!run.prepared || run.bundle) throw new Error("Only prepared, unfinished experiments can extend their budget.");
+        const task = (run.task.learning === "reinforcement" ? validateRlBudget : validateTask)({ ...run.task, minutes: args.minutes, trials: args.trials });
+        if (task.trials !== null && task.trials < run.trials.length) throw new Error("The new total must include all trials already attempted.");
+        run.task = task;
         run.deadline = args.minutes === null ? null : Date.parse(run.createdAt) + args.minutes * 60_000;
         await saveRun(root, run);
         return view(run);
@@ -170,6 +194,7 @@ export async function createMcpService(home, runtime) {
       let device;
       return start(args.runId, "training", async run => {
         ready(run);
+        if (run.task.learning === "reinforcement") throw new Error("Use helix_run_rl_trial for reinforcement learning.");
         if (run.task.trials !== null && run.trials.length >= run.task.trials) throw new Error("The trial budget has ended. Finalize, or extend the budget at the user's request.");
         if ((args.device || run.environment.device || "cpu") !== "cpu") runtime.compute = await probeCompute(runtime.python);
         device = trialDevice(runtime.compute, run.environment, args.device);
@@ -214,6 +239,10 @@ export async function createMcpService(home, runtime) {
       if (device !== "cpu") selectDevice(await probeCompute(runtime.python), device);
       // A frozen run may retry packaging, but evaluateFinal never repeats a started test.
     }, async (run, signal) => {
+      if (run.task.learning === "reinforcement") {
+        run.environment.selectedDevice = run.environment.device;
+        return finalizeRl(root, run, context(run), signal);
+      }
       run.selectionFrozen = true;
       await saveRun(root, run);
       const final = join(folder(run.id), "final", "source");

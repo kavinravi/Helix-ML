@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { runProcess } from "../local/process.mjs";
 import { runtimeConfig } from "./runtime.mjs";
+import { container } from "../local/runtime.mjs";
 
 const home = resolve(process.env.HELIX_MCP_HOME || join(homedir(), ".helix-ml", "mcp"));
 const runtime = await runtimeConfig(home);
@@ -104,6 +105,14 @@ Path(a.output).write_text(json.dumps(pred.tolist()))
 `;
 const ids = [];
 try {
+  const hooks = join(temp, "wheel-hooks");
+  await mkdir(hooks);
+  await writeFile(join(hooks, "startup.pth"), "import os; os.environ['HELIX_WHEEL_HOOK']='active'\n");
+  const hookContext = {runtime: {...runtime,device:"cpu"},deadline:Date.now()+30000};
+  assert.equal((await container(hookContext,["python","-c","import os,sys; assert sys.argv[1]=='argument with spaces'; print(os.environ['HELIX_WHEEL_HOOK'])","argument with spaces"],{mounts:[[hooks,"/packages"]]})).output.trim(),"active");
+  assert.equal((await container(hookContext,["python","-c","import os; print(os.environ.get('HELIX_WHEEL_HOOK','absent'))"])).output.trim(),"absent");
+  await writeFile(join(hooks,"hook_probe.py"),"import os; print(os.environ['HELIX_WHEEL_HOOK'])\n");
+  assert.equal((await container(hookContext,["python","-m","hook_probe"],{mounts:[[hooks,"/packages"]]})).output.trim(),"active");
   const source = join(temp, "source"), dataset = join(temp, "data.csv");
   await mkdir(source);
   await writeFile(dataset, "a,b,c,d,label,y\n" + Array.from({ length: 150 }, (_, i) => `${i%3*8+Math.sin(i)},${i%3*6+Math.cos(i)},${Math.sin(i*3)},${i%3*5+Math.cos(i*2)},${i%2?'yes':'no'},${i%3*4+Math.sin(i)}`).join("\n"));

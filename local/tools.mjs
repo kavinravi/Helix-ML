@@ -37,6 +37,18 @@ const packages = [
   "onnxruntime",
   "skl2onnx",
   "tensorflow-cpu",
+  "tensorflow",
+  "tensorflow[and-cuda]",
+  "keras",
+  "cuml-cu12",
+  "cuml-cu13",
+  "cupy-cuda12x",
+  "cupy-cuda13x",
+  "stable-baselines3",
+  "gymnasium",
+  "gymnasium[classic-control]",
+  "gymnasium[box2d]",
+  "gymnasium[mujoco]",
 ];
 const objectSchema = (properties) => ({
   type: "object",
@@ -149,6 +161,25 @@ export function torchPackageOptions(name, runtime) {
   if (!["torch", "torchvision", "torchaudio"].includes(name)) return [];
   if (runtime?.kind === "native" && process.platform === "darwin") return [];
   return ["--index-url", runtime?.kind === "native" && runtime.compute?.torchIndex || "https://download.pytorch.org/whl/cpu"];
+}
+
+export function frameworkPackageOptions(name, runtime, platform = process.platform) {
+  if (/^(cuml-cu|cupy-cuda)/.test(name)) {
+    if (runtime?.kind !== "native" || platform !== "linux" || runtime.device !== "cuda")
+      throw new Error("cuML/CuPy require local NVIDIA CUDA on Linux or WSL2. Native Windows and Apple MPS are unsupported.");
+    const major = name.includes("13") ? 13 : 12;
+    if (name.startsWith("cuml") && Number(runtime.compute?.cuda?.capability) < 7)
+      throw new Error("Current cuML requires NVIDIA compute capability 7.0 or newer.");
+    if (major === 13 && Number(runtime.compute?.cuda?.runtime?.split(".")[0]) < 13)
+      throw new Error("This runtime uses CUDA 12. Choose the cu12/cu12x package or upgrade the NVIDIA driver and rerun setup.");
+    return ["--extra-index-url", "https://pypi.nvidia.com"];
+  }
+  if (name.startsWith("tensorflow") && runtime?.kind === "native") {
+    if (runtime.device === "mps") throw new Error("TensorFlow does not use PyTorch MPS. Choose CPU or use PyTorch for Apple GPU training.");
+    if (runtime.device === "cuda" && (platform !== "linux" || name !== "tensorflow[and-cuda]"))
+      throw new Error("TensorFlow CUDA requires Linux/WSL2 and tensorflow[and-cuda]. Use CPU on native Windows/macOS.");
+  }
+  return torchPackageOptions(name, runtime);
 }
 
 export async function callTool(name, args, context) {
@@ -275,11 +306,11 @@ export async function callTool(name, args, context) {
       if (typeof args.version !== "string" || !/^\d+(?:\.\d+)*(?:[a-z]+\d*)?$/.test(args.version))
         throw new Error("Choose an exact package version, such as 1.7.2.");
       await mkdir(context.packages, { recursive: true });
-      const extra = torchPackageOptions(args.name, context.runtime);
+      const extra = frameworkPackageOptions(args.name, context.runtime);
       // Resolve against the runtime first: --target alone reinstalls every dependency,
       // wasting the bounded /tmp filesystem even when NumPy/SciPy are already present.
       const installer = `import json, subprocess, sys, os, tempfile
-pip = [sys.executable, '-m', 'pip', 'install', '--no-cache-dir']
+pip = [sys.executable, '-m', 'pip', 'install'] + ([] if os.environ.get('PIP_CACHE_DIR') else ['--no-cache-dir'])
 if os.environ.get('HELIX_TORCH_VERSION'):
     constraints = os.path.join(tempfile.gettempdir(), 'helix-torch-constraint.txt')
     with open(constraints, 'w') as f: f.write('torch==' + os.environ['HELIX_TORCH_VERSION'] + '\\n')
@@ -295,6 +326,9 @@ else:
 `;
       return (await container(context, ["python", "-c", installer, `${args.name}==${args.version}`, ...extra], {
         signal: context.signal, network: true, mounts: [[context.packages, "/packages", "rw"]], writable: context.packages,
+        onLine: line => { if (/^(Collecting|Downloading|Installing collected|Successfully installed|Requested package)/.test(line)) context.onProgress?.(line); },
+        // GPU framework wheels are much larger than fitted-model outputs.
+        ...(context.runtime?.kind === "native" ? { limit: 12_000_000_000 } : {}),
       })).output.slice(-6000);
     }
     case "cache_model": {

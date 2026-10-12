@@ -30,14 +30,15 @@ def check_source(source, task):
 
     policy = task["policy"]
     requested = task.get("model", "").strip()
-    exact = re.fullmatch(r"(?:sklearn\.[A-Za-z_]+\.)?([A-Z][A-Za-z0-9]+(?:Classifier|Regressor|Regression))", requested)
+    exact = re.fullmatch(r"(?:(?:sklearn|cuml)\.[A-Za-z_]+\.|cuml\.)?([A-Z][A-Za-z0-9]+(?:Classifier|Regressor|Regression))", requested)
     reduction = task.get("learning") == "reduction"
     if task.get("learning") in {"clustering", "reduction"}:
-        exact = re.fullmatch(r"(?:sklearn\.[A-Za-z_]+\.|umap\.)?([A-Z][A-Za-z0-9]+)", requested)
+        exact = re.fullmatch(r"(?:(?:sklearn|cuml)\.[A-Za-z_]+\.|cuml\.|umap\.)?([A-Z][A-Za-z0-9]+)", requested)
     tree_only = bool(re.fullmatch(r"tree(?:[- ]based)? models?(?: only)?", requested, re.I))
     estimators = ("sklearn.tree.", "sklearn.ensemble.", "sklearn.linear_model.", "sklearn.svm.", "sklearn.neighbors.", "sklearn.naive_bayes.", "sklearn.neural_network.", "xgboost.", "lightgbm.", "catboost.")
     if task.get("learning") in {"clustering", "reduction"}:
         estimators += ("sklearn.cluster.", "sklearn.mixture.", "sklearn.decomposition.", "umap.")
+    estimators += ("cuml.cluster.", "cuml.decomposition.", "cuml.linear_model.", "cuml.ensemble.", "cuml.svm.", "cuml.neighbors.", "cuml.naive_bayes.")
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -50,7 +51,8 @@ def check_source(source, task):
             except (KeyError, ValueError, TypeError):
                 return False
         reason = None
-        if exact and name.startswith(estimators) and leaf != exact.group(1):
+        cuml_alias = name.startswith("cuml.") and name.count(".") == 1 and leaf[:1].isupper()
+        if exact and (name.startswith(estimators) or cuml_alias) and leaf != exact.group(1):
             reason = f"Only the requested estimator {exact.group(1)} is permitted"
         # PyTorch Module.eval() changes inference mode; it evaluates no Python string.
         inference_mode = isinstance(node.func, ast.Attribute) and leaf == "eval" and not node.args and not node.keywords
