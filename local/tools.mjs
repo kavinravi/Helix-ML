@@ -273,14 +273,14 @@ export async function callTool(name, args, context) {
         : [];
       // Resolve against the runtime first: --target alone reinstalls every dependency,
       // wasting the bounded /tmp filesystem even when NumPy/SciPy are already present.
-      const installer = `import json, subprocess, sys
+      const installer = `import json, subprocess, sys, os, tempfile
 pip = [sys.executable, '-m', 'pip', 'install', '--no-cache-dir']
-report = '/tmp/install-plan.json'
+report = os.path.join(tempfile.gettempdir(), 'install-plan.json')
 subprocess.run(pip + ['--dry-run', '--report', report] + sys.argv[1:], check=True)
 with open(report) as f: plan = json.load(f)['install']
 requirements = [entry['metadata']['name'] + '==' + entry['metadata']['version'] for entry in plan]
 if requirements:
-    subprocess.run(pip + ['--no-deps', '--upgrade', '--target', '/packages'] + requirements + sys.argv[2:], check=True)
+    subprocess.run(pip + ['--no-deps', '--upgrade', '--target', os.environ.get('HELIX_PACKAGES', '/packages')] + requirements + sys.argv[2:], check=True)
 else:
     print('Requested package and its dependencies are already installed.')
 `;
@@ -297,10 +297,10 @@ else:
       if (!license) throw new Error("This model does not declare a license. Choose a documented model.");
       await mkdir(context.models, { recursive: true });
       await container(context, ["python", "-c",
-        'import sys; from huggingface_hub import snapshot_download; snapshot_download(sys.argv[1], revision=sys.argv[2], local_dir="/models/" + sys.argv[1].replace("/", "--") + "--" + sys.argv[2], ignore_patterns=["*.py", "*.bin", "*.pkl", "*.pickle", "*.pt", "*.pth"])', repo, args.revision], {
-        network: true, mounts: [[context.models, "/models", "rw"]], writable: context.models,
+        'import os, sys; from huggingface_hub import snapshot_download; snapshot_download(sys.argv[1], revision=sys.argv[2], local_dir=os.path.join(os.environ.get("HELIX_MODELS", "/models"), sys.argv[1].replace("/", "--") + "--" + sys.argv[2]), ignore_patterns=["*.py", "*.bin", "*.pkl", "*.pickle", "*.pt", "*.pth"])', repo, args.revision], {
+        signal: context.signal, network: true, mounts: [[context.models, "/models", "rw"]], writable: context.models,
       });
-      const record = { repository: repo, revision: args.revision, license, path: `/models/${repo.replace("/", "--")}--${args.revision}` };
+      const record = { repository: repo, revision: args.revision, license, path: context.runtime?.kind === "native" ? join(context.models, `${repo.replace("/", "--")}--${args.revision}`) : `/models/${repo.replace("/", "--")}--${args.revision}` };
       await writeFile(join(context.models, `${repo.replace("/", "--")}--${args.revision}.json`), JSON.stringify(record));
       return record;
     }

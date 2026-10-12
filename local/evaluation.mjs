@@ -11,6 +11,11 @@ const preparer = fileURLToPath(new URL("./prepare.py", import.meta.url));
 const python = () => process.env.HELIX_PYTHON || "python3";
 const json = async (path) => JSON.parse(await readFile(path, "utf8"));
 
+export function publicDatasetInfo(metadata) {
+  const info = Object.fromEntries(["target", "metric", "taskType", "dimensions", "reductionMode", "varianceTarget", "features", "classes", "assetColumns", "assetTypes", "classCounts", "fitsPerTrial", "resources", "featureEncoding", "metrics", "positiveClass"].map(key => [key, metadata[key]]));
+  return { ...info, schema: metadata.developmentSchema };
+}
+
 export async function inspectDataset(task, { signal } = {}) {
   const temporary = await mkdtemp(join(tmpdir(), "helix-inspect-"));
   try {
@@ -62,7 +67,7 @@ export function aggregateScores(results, expected) {
     ...(names.length ? { metricScores: Object.fromEntries(names.map(name => [name, results.reduce((sum, result) => sum + result.metricScores[name] / expected, 0)])) } : {}) };
 }
 
-export async function evaluateCandidate(root, run, workspace, { signal, deadline, candidateId, onEvent = () => {}, final = false, image, packages: packagePath }) {
+export async function evaluateCandidate(root, run, workspace, { signal, deadline, candidateId, onEvent = () => {}, final = false, image, runtime, packages: packagePath }) {
   const folder = join(root, run.id), evaluation = join(folder, "evaluation");
   const protocol = await json(join(evaluation, "protocol.json"));
   const metadata = await json(join(evaluation, "manifest.json"));
@@ -76,7 +81,7 @@ export async function evaluateCandidate(root, run, workspace, { signal, deadline
   const resources = JSON.parse(capacity.output);
   onEvent("system", `Memory estimate: ${Math.ceil(Math.max(resources.estimatedFitBytes, resources.estimatedScoringBytes) / 1024 ** 2)} MiB of ${resources.limitBytes / 1024 ** 2} MiB available per fit.`);
   const context = {
-    root, runId: run.id, deadline, image: image || IMAGE,
+    root, runId: run.id, deadline, image: image || IMAGE, runtime,
     user: typeof process.getuid === "function" ? `${process.getuid()}:${process.getgid()}` : "65534:65534",
   };
   const models = join(folder, "models"), packages = packagePath || join(folder, "packages");

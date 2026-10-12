@@ -2,6 +2,47 @@
 
 Run ML experiments with your own Codex or Claude Code subscription. Upload data, describe the task, compare independently measured candidates, and download the selected source and trained model.
 
+## Use your computer through MCP — no Docker
+
+Helix can also run inside your existing **Codex or Claude Code** session. Your agent writes candidates and calls Helix's local tools; your computer does the training and evaluation. No Helix account, Railway worker, pairing code, second agent login or API key is needed. Your normal agent subscription still supplies the language model.
+
+Install Node.js **22.13+**, Python **3.11+**, and your chosen agent CLI. Python 3.12 is the tested baseline. Then run one command in Terminal or PowerShell:
+
+```sh
+# Codex
+npx --yes --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix install codex --allow-local-code
+
+# Or Claude Code
+npx --yes --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix install claude --allow-local-code
+```
+
+The installer creates a private Python environment, installs ML dependencies, registers the MCP server, and installs the Helix workflow skill. Its files are copied out of npm's temporary cache. Restart your agent session after installation. The package comes directly from [GitHub releases](https://github.com/kavinravi/Helix-ML/releases); Git is not required.
+
+**Local execution:** `--allow-local-code` acknowledges that generated Python runs with your user permissions, including file and network access. A virtual environment isolates dependencies; it does not sandbox code. Only run candidates you trust. Helix omits validation labels from the normal training inputs and independently computes scores, but native mode cannot protect evaluation files from deliberately hostile code. It strips inherited credentials from training subprocess environments; this does not prevent access to credentials stored on disk.
+
+Example request:
+
+> Use Helix on `/absolute/path/to/data.csv`. Predict `outcome` with logistic regression and maximize ROC-AUC and F1. Use 3-fold validation, seed 42, at most 10 trials and 30 minutes. Show me the proposed setup first.
+
+On Windows, give the equivalent full path, such as `C:\Users\you\Documents\data.csv`. You can also ask to cluster without labels, minimize Davies–Bouldin, or run PCA with a fixed dimension count or a cumulative variance target. The agent reads Helix's metric catalog and code contract directly. It does not start a nested agent or require another sign-in.
+
+Trials run as background jobs. Ask for progress or cancellation, or ask to extend the budget before finalizing. The time budget includes agent planning/editing time, so leave time for final refitting and export. After selection is frozen, the reserved test set is evaluated once and that experiment cannot accept more trials. Completed results persist across agent sessions. A normal session close cancels active work; force-killing the server may require stopping leftover Python processes manually.
+
+The agent returns a local solution ZIP containing source, the reload-verified model when requested, the protocol, measured metrics, an environment record and dependency versions. Reduction/clustering exports also contain representations and projection data; iterative models can supply measured training curves. No raw dataset is bundled. Results stay local and are not synced to the Railway website. Your agent may send tool results or files it reads to its provider, according to the agent's configuration.
+
+Files live in `~/.helix-ml/mcp` (`%USERPROFILE%\.helix-ml\mcp` on Windows). Each experiment gets separate source snapshots and dependency directories. One compute job runs at a time across connected sessions. The default CPU thread count leaves one logical core free; memory estimates use half of physical RAM, capped at 64 GiB. These are planning limits, not hard resource quotas. NVIDIA/CUDA and Apple MPS acceleration are not configured or validated in this release.
+
+To diagnose or update:
+
+```sh
+npx --yes --package=https://github.com/kavinravi/Helix-ML/releases/download/v0.2.0/helix-mcp.tgz helix doctor
+# Update by rerunning the install command, then restarting your agent.
+```
+
+From a source checkout, use `node mcp/cli.mjs` instead of the `npx … helix` prefix. No frontend build or npm dependency installation is needed for MCP. Override the state directory with `--home`, or select a Python executable with `HELIX_PYTHON`. To remove the connection, run `codex mcp remove helix` or `claude mcp remove --scope user helix`; remove the `helix-ml` folder in `~/.agents/skills` or `~/.claude/skills` to remove the companion skill. Experiments remain on disk unless you delete the state directory.
+
+MCP registration follows the official [Codex](https://developers.openai.com/codex/mcp) and [Claude Code](https://code.claude.com/docs/en/mcp) CLI interfaces. The [local MCP CI workflow](.github/workflows/local-mcp.yml) runs real CPU fits, exports and cancellation checks on Linux, macOS and Windows; physical Mac/Windows agent installation still needs user testing.
+
 ## Open in your browser
 
 [Open Helix](https://helix-web-production-03c9.up.railway.app) · [Project page](https://kavinravi.com/projects/helix-ml)
@@ -34,7 +75,7 @@ Set `HELIX_ADMIN_GITHUB_ID` on the hosted gateway to the owner's immutable numer
 
 Signup/activity tracking begins with this update. Existing users keep their accounts and sessions; their original signup dates remain unknown. Last seen records authenticated requests at most once per five minutes, including requests from an open browser tab. The seven-day counters reflect recorded activity, not historical analytics or live human presence. Saved workspaces are not a count of running experiments.
 
-## Run it locally
+## Run the browser app locally (Docker)
 
 The ready-to-run ZIP includes the built interface. If your prerequisites and training runtime are already set up, extract it and run `npm start`; no dependency installation or interface build is needed.
 

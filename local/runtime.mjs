@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readdir, lstat, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { runProcess, expired, remainingTime } from "./process.mjs";
+import { nativeProcess } from "./native.mjs";
 
 export const IMAGE = "helix-ml:local";
 export const owner = (root) => createHash("sha256").update(resolve(root)).digest("hex").slice(0, 16);
@@ -48,6 +49,7 @@ export async function directoryBytes(root) {
 }
 
 export async function container(context, command, { mounts = [], network = false, signal, onLine, writable, limit = 1_000_000_000 } = {}) {
+  if (context.runtime?.kind === "native") return nativeProcess(context, command, { mounts, signal, onLine, writable, limit });
   if (mounts.some(([path]) => path.includes(",") || path.includes("\n"))) throw new Error("Docker workspaces and datasets must use paths without commas or newlines.");
   if (expired(context.deadline)) throw new Error("The run budget has expired.");
   const name = `helix-${context.runId}-${randomUUID().slice(0, 8)}`;

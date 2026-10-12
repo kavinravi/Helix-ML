@@ -1,0 +1,18 @@
+---
+name: helix-ml
+description: Run and compare local ML experiments through the Helix MCP tools, including supervised learning, clustering and dimensionality reduction. Use when the user asks to use Helix or to run a Helix experiment on their own computer.
+---
+
+Use the current agent session to write candidates and call Helix. Do not launch another Codex/Claude process or ask for an API key.
+
+Read `helix_info` for the runtime and metric catalog. Infer a proposed task and metric from the user's message, but show the target/exclusions, model restriction, optimization rule, validation/test split and time/trial budgets before training. Ask only for missing choices that affect correctness; an explicit user specification already authorizes those choices. For joint objectives, Helix supports same-direction supervised metrics ranked by their equal-weight mean; disclose this and preserve all requested metrics. Do not invent a metric or drop one silently.
+
+Use an absolute local CSV path with `helix_create_experiment`. Wait for preparation using `helix_status`, then request `details=true` once for the schema, installed packages, class order and full training-code contract. Use compact status for subsequent progress polls; request details again when you need every recorded trial. Clustering needs no target except for external label-based evaluation. Reduction supports a fixed dimension count or a PCA cumulative-variance target. Preserve categorical/text columns when meaningful; exclude identifiers and unintended labels explicitly.
+
+Write a separate source-only directory outside Helix's private state directory. Follow the returned contract for `train.py`, `predict.py`, `plan.json` and any helper modules. Inspect the code for leakage, correct class order, model/strategy restrictions and reload behavior before submitting. Use the installed dependencies; provide exact additional package versions in `helix_run_trial` only when needed. Source files are snapshotted per trial. Extra packages do not carry into later trials automatically: repeat their requested versions for each candidate that needs them.
+
+`helix_run_trial` starts a background job. Poll `helix_status` every few seconds; do other useful work between polls. Use only its measured validation results to compare and improve candidates. Report failures and repair code within the user's remaining budget. `helix_cancel` stops an active job. Extend a budget only when the user requests further work. Keep enough time for final refitting/export; a time limit includes the agent's elapsed planning and editing time.
+
+Call `helix_finalize` once after selecting from validation results. The harness refits the best candidate, checks a fresh-process model reload and evaluates the reserved test set once. Once selection is frozen, no more trials are permitted in that experiment. Report actual metrics and the returned solution ZIP path; show training curves or projections only if measured outputs exist. Never treat a test result as feedback for tuning the same study.
+
+Native execution has normal user permissions, not OS isolation. Run code only within the user's authorized local experiment. Do not read raw held-out labels, Helix's internal evaluation files, other candidates' fit data or unrelated user files. Do not send raw dataset rows to an external service without authorization. The normal CLI inputs omit validation targets, and the evaluator computes scores in its own process; these controls are not protection against hostile Python code. Closing the MCP session interrupts active work while preserving completed trial results.

@@ -16,3 +16,4 @@
 !local/
 !local/*.mjs
 !local/*.py
+!local/*.json

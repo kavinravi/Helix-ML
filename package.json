@@ -1,6 +1,6 @@
 {
   "name": "helix-ml",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -24,7 +24,9 @@
     "test:agents": "node local/agent_check.mjs",
     "test:mvp": "node local/mvp_check.mjs",
     "test:acceptance": "node local/acceptance_check.mjs",
-    "test:hosted": "node hosted/check.mjs"
+    "test:hosted": "node hosted/check.mjs",
+    "test:mcp": "node --test mcp/check.test.mjs",
+    "test:mcp:runtime": "node mcp/runtime_check.mjs"
   },
   "dependencies": {
     "react": "19.1.0",
@@ -35,5 +37,17 @@
     "@types/react-dom": "19.1.0",
     "typescript": "5.9.3",
     "vite": "7.3.5"
-  }
+  },
+  "bin": {
+    "helix": "mcp/cli.mjs"
+  },
+  "files": [
+    "local/*.mjs",
+    "local/*.py",
+    "local/*.json",
+    "mcp/**/*.mjs",
+    "mcp/requirements.txt",
+    "mcp/skills/**",
+    "examples/*.csv"
+  ]
 }
